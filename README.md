@@ -49,9 +49,14 @@ pip install -r requirements.txt
 
 ## 使用
 
-運行應用程式：
+運行應用程式（從專案根目錄）：
 ```bash
-python src/main.py
+python main.py
+```
+
+或者使用模組方式運行：
+```bash
+python -m src.main
 ```
 
 ### 基本操作
