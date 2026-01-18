@@ -46,13 +46,29 @@ class Transcriber:
         Returns:
             設備名稱
         """
-        if device_preference == "cuda" and torch.cuda.is_available():
+        cuda_available = torch.cuda.is_available()
+        
+        # 診斷資訊
+        if device_preference in ("auto", "cuda") and not cuda_available:
+            # 檢查是否安裝了 CPU 版本的 PyTorch
+            if "+cpu" in torch.__version__:
+                print(f"⚠️  警告: 檢測到 PyTorch CPU 版本 ({torch.__version__})")
+                print("   請安裝 CUDA 版本的 PyTorch 以使用 GPU 加速")
+                print("   執行: pip uninstall torch torchvision torchaudio")
+                print("   然後: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
+            else:
+                print(f"⚠️  CUDA 不可用，將使用 CPU")
+        
+        if device_preference == "cuda" and cuda_available:
             return "cuda"
         elif device_preference == "cpu":
             return "cpu"
         else:
             # auto 模式
-            return "cuda" if torch.cuda.is_available() else "cpu"
+            if cuda_available:
+                gpu_name = torch.cuda.get_device_name(0)
+                print(f"✓ 使用 GPU: {gpu_name}")
+            return "cuda" if cuda_available else "cpu"
     
     def load_model(self, model_name: str = "base", device: str = "auto") -> None:
         """
@@ -135,3 +151,29 @@ class Transcriber:
     def model_name(self) -> Optional[str]:
         """獲取當前載入的模型名稱"""
         return self._model_name
+    
+    def get_device_info(self) -> Dict[str, any]:
+        """
+        獲取設備詳細資訊
+        
+        Returns:
+            包含設備資訊的字典
+        """
+        info = {
+            "pytorch_version": torch.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "current_device": self._device,
+            "gpus": []
+        }
+        
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                gpu_info = {
+                    "index": i,
+                    "name": torch.cuda.get_device_name(i),
+                    "memory_total_gb": torch.cuda.get_device_properties(i).total_memory / (1024**3),
+                    "memory_allocated_gb": torch.cuda.memory_allocated(i) / (1024**3) if i == 0 else 0
+                }
+                info["gpus"].append(gpu_info)
+        
+        return info

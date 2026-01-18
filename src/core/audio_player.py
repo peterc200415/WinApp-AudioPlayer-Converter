@@ -35,6 +35,7 @@ class AudioPlayer:
         self.is_playing: bool = False
         self.is_paused: bool = False
         self.is_closing: bool = False
+        self.volume: float = 1.0  # 音量範圍 0.0 - 1.0
         
         self.temp_files: List[str] = []  # 追蹤臨時檔案
         
@@ -76,9 +77,7 @@ class AudioPlayer:
                 self.current_subtitles = SubtitleParser.parse_srt(srt_path)
             else:
                 self.current_subtitles = []
-                # 如果沒有字幕且回調存在，觸發轉錄請求
-                if self.on_subtitle_needed:
-                    self.on_subtitle_needed(file_path)
+                # 不再自動觸發轉錄（改為在播放前檢查）
         except Exception as e:
             print(f"載入字幕失敗: {e}")
             self.current_subtitles = []
@@ -148,6 +147,7 @@ class AudioPlayer:
         try:
             if file_ext == '.mp3' or file_ext == '.wav':
                 pygame.mixer.music.load(self.current_file)
+                pygame.mixer.music.set_volume(self.volume)  # 設置音量
                 pygame.mixer.music.play()
             elif file_ext == '.m4a':
                 if not self._convert_and_play_m4a():
@@ -178,6 +178,7 @@ class AudioPlayer:
             self.temp_files.append(temp_wav_file.name)
             
             pygame.mixer.music.load(temp_wav_file.name)
+            pygame.mixer.music.set_volume(self.volume)  # 設置音量
             pygame.mixer.music.play()
             return True
         except Exception as e:
@@ -228,6 +229,25 @@ class AudioPlayer:
             return 0.0
         pos = pygame.mixer.music.get_pos()
         return pos / 1000.0 if pos > 0 else 0.0
+    
+    def set_volume(self, volume: float) -> None:
+        """
+        設置音量
+        
+        Args:
+            volume: 音量值（0.0 - 1.0）
+        """
+        self.volume = max(0.0, min(1.0, volume))  # 限制在 0.0-1.0 範圍
+        pygame.mixer.music.set_volume(self.volume)
+    
+    def get_volume(self) -> float:
+        """
+        獲取當前音量
+        
+        Returns:
+            當前音量值（0.0 - 1.0）
+        """
+        return self.volume
     
     def set_playlist(self, file_list: List[str]) -> None:
         """

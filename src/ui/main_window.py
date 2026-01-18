@@ -10,7 +10,7 @@ from typing import Optional
 
 from src.core.audio_player import AudioPlayer
 from src.core.transcriber import Transcriber
-from src.utils.file_utils import find_audio_files
+from src.utils.file_utils import find_audio_files, has_srt_file
 from src.utils.config import Config
 from src.ui.components.subtitle_display import SubtitleDisplay
 from src.ui.components.playlist_view import PlaylistView
@@ -76,6 +76,7 @@ class MainWindow:
         self.controls.on_next = self._on_next
         self.controls.on_previous = self._on_previous
         self.controls.on_close = self._on_close
+        self.controls.on_volume_changed = self._on_volume_changed
         self.controls.pack(pady=10)
         
         # 進度條
@@ -103,10 +104,10 @@ class MainWindow:
         self.player.set_playlist(audio_files)
         self.playlist_view.set_playlist(audio_files)
         
-        # 開始播放第一首
+        # 開始播放第一首（會檢查字幕並等待轉錄）
         if audio_files:
             self.player.current_index = 0
-            self.player.play(audio_files[0])
+            self._play_with_subtitle_check(audio_files[0])
             self.playlist_view.set_current_index(0)
             
             # 背景轉錄（如果需要）
@@ -118,19 +119,44 @@ class MainWindow:
         self.player.toggle_pause()
         self.controls.update_pause_button(self.player.is_paused)
     
+    def _on_volume_changed(self, volume: float) -> None:
+        """處理音量變更事件"""
+        self.player.set_volume(volume)
+    
     def _on_next(self) -> None:
         """處理下一首事件"""
-        if self.player.next_track():
-            self.playlist_view.set_current_index(self.player.current_index)
+        if self.player.playlist:
+            if self.player.current_index < len(self.player.playlist) - 1:
+                next_index = self.player.current_index + 1
+            else:
+                next_index = 0
+            
+            if 0 <= next_index < len(self.player.playlist):
+                file_path = self.player.playlist[next_index]
+                self.player.current_index = next_index
+                self._play_with_subtitle_check(file_path)
+                self.playlist_view.set_current_index(next_index)
     
     def _on_previous(self) -> None:
         """處理上一首事件"""
-        if self.player.previous_track():
-            self.playlist_view.set_current_index(self.player.current_index)
+        if self.player.playlist:
+            if self.player.current_index > 0:
+                prev_index = self.player.current_index - 1
+            else:
+                prev_index = len(self.player.playlist) - 1
+            
+            if 0 <= prev_index < len(self.player.playlist):
+                file_path = self.player.playlist[prev_index]
+                self.player.current_index = prev_index
+                self._play_with_subtitle_check(file_path)
+                self.playlist_view.set_current_index(prev_index)
     
     def _on_playlist_select(self, index: int) -> None:
         """處理播放列表選擇事件"""
-        if self.player.play_index(index):
+        if 0 <= index < len(self.player.playlist):
+            file_path = self.player.playlist[index]
+            self.player.current_index = index
+            self._play_with_subtitle_check(file_path)
             self.playlist_view.set_current_index(index)
     
     def _on_subtitle_changed(self, subtitle: Optional) -> None:
@@ -147,11 +173,65 @@ class MainWindow:
         if self.player.playlist:
             self.root.after(0, self._auto_play_next)
     
+    def _play_with_subtitle_check(self, audio_path: str) -> None:
+        """
+        播放音頻檔案，如果沒有字幕則先等待轉錄完成
+        
+        Args:
+            audio_path: 音頻檔案路徑
+        """
+        # 檢查是否有字幕
+        if has_srt_file(audio_path):
+            # 有字幕，直接播放
+            self.player.play(audio_path)
+            self.progress_bar.set_maximum(self.player.current_duration)
+        else:
+            # 沒有字幕，先轉錄再播放
+            auto_transcribe = self.config.get("auto_transcribe_on_play", True)
+            if auto_transcribe:
+                # 顯示轉錄提示
+                self.subtitle_display.update_subtitle(None)
+                filename = os.path.basename(audio_path)
+                self._log_message(f"缺少字幕，正在轉錄: {filename}...")
+                self.root.update()  # 更新 UI 以顯示訊息
+                
+                # 同步轉錄（等待完成）
+                try:
+                    srt_path = self.transcriber.transcribe_to_srt(
+                        audio_path,
+                        model_name=self.config.get("whisper_model", "base"),
+                        device=self.config.get("device", "auto")
+                    )
+                    self._log_message(f"✓ 轉錄完成: {filename}")
+                    
+                    # 轉錄完成後再播放
+                    self.player.play(audio_path)
+                    self.progress_bar.set_maximum(self.player.current_duration)
+                    self.playlist_view._update_display()  # 更新列表顯示
+                except Exception as e:
+                    self._log_message(f"✗ 轉錄失敗: {filename} - {str(e)}")
+                    # 即使轉錄失敗也播放（無字幕）
+                    self.player.play(audio_path)
+                    self.progress_bar.set_maximum(self.player.current_duration)
+            else:
+                # 未啟用自動轉錄，直接播放（無字幕）
+                self._log_message(f"未啟用自動轉錄，直接播放: {os.path.basename(audio_path)}")
+                self.player.play(audio_path)
+                self.progress_bar.set_maximum(self.player.current_duration)
+    
     def _auto_play_next(self) -> None:
         """自動播放下一首"""
-        if self.player.next_track():
-            self.playlist_view.set_current_index(self.player.current_index)
-            self.progress_bar.set_maximum(self.player.current_duration)
+        if self.player.playlist:
+            if self.player.current_index < len(self.player.playlist) - 1:
+                next_index = self.player.current_index + 1
+            else:
+                next_index = 0
+            
+            if 0 <= next_index < len(self.player.playlist):
+                file_path = self.player.playlist[next_index]
+                self.player.current_index = next_index
+                self._play_with_subtitle_check(file_path)
+                self.playlist_view.set_current_index(next_index)
     
     def _on_subtitle_needed(self, audio_path: str) -> None:
         """
