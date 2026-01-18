@@ -104,19 +104,30 @@ class MainWindow:
         self.player.set_playlist(audio_files)
         self.playlist_view.set_playlist(audio_files)
         
-        # 開始播放第一首（會檢查字幕並等待轉錄）
+        # 設置當前索引為第一首（但不自動播放，等待用戶按下播放按鈕）
         if audio_files:
             self.player.current_index = 0
-            self._play_with_subtitle_check(audio_files[0])
             self.playlist_view.set_current_index(0)
+            self._log_message(f"已載入 {len(audio_files)} 個音頻檔案，請點擊播放按鈕開始播放")
             
             # 背景轉錄（如果需要）
             if self.config.get("auto_transcribe", False):
                 self._transcribe_playlist_background(audio_files)
     
     def _on_pause(self) -> None:
-        """處理暫停事件"""
-        self.player.toggle_pause()
+        """處理暫停/播放事件"""
+        if not self.player.is_playing and not self.player.is_paused:
+            # 如果沒有播放也沒有暫停，表示尚未開始播放，則開始播放當前索引的檔案
+            if self.player.playlist and 0 <= self.player.current_index < len(self.player.playlist):
+                file_path = self.player.playlist[self.player.current_index]
+                self._play_with_subtitle_check(file_path)
+                self.playlist_view.set_current_index(self.player.current_index)
+            else:
+                # 如果沒有播放列表，提示用戶
+                self._log_message("請先選擇音頻目錄")
+        else:
+            # 如果正在播放或暫停，則切換暫停狀態
+            self.player.toggle_pause()
         self.controls.update_pause_button(self.player.is_paused)
     
     def _on_volume_changed(self, volume: float) -> None:

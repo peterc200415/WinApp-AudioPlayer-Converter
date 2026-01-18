@@ -44,7 +44,7 @@ class PlayerControls:
         )
         self.pause_btn = tk.Button(
             self.frame, 
-            text="⏸", 
+            text="▶",  # 初始狀態顯示播放圖標
             width=3,
             font=("Arial", 12),
             command=lambda: self.on_pause() if self.on_pause else None
@@ -109,10 +109,10 @@ class PlayerControls:
     
     def update_pause_button(self, is_paused: bool) -> None:
         """
-        更新暫停按鈕圖標
+        更新暫停/播放按鈕圖標
         
         Args:
-            is_paused: 是否暫停
+            is_paused: 是否暫停（True=暫停中顯示播放，False=播放中顯示暫停，None=未開始顯示播放）
         """
         self.pause_btn.config(text="▶" if is_paused else "⏸")
     
