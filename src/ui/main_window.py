@@ -81,6 +81,7 @@ class MainWindow:
         
         # 進度條
         self.progress_bar = ProgressBar(self.root, length=400)
+        self.progress_bar.on_seek = self._on_progress_seek  # 設置跳轉回調
         self.progress_bar.pack(pady=10)
         
         # 播放列表
@@ -179,6 +180,20 @@ class MainWindow:
         """處理播放位置變更事件"""
         self.root.after(0, lambda: self.progress_bar.set_value(position))
     
+    def _on_progress_seek(self, target_time: float) -> None:
+        """
+        處理進度條跳轉事件
+        
+        Args:
+            target_time: 目標時間（秒）
+        """
+        # 注意：pygame.mixer.music 不支持直接跳轉，此功能需要重新載入音頻
+        # 這裡只記錄訊息，實際跳轉功能可以通過重新播放實現（稍後可優化）
+        if self.player.is_playing and self.player.current_file:
+            # 目前 pygame 不支持跳轉，所以暫時只顯示訊息
+            # 未來可以通過 pydub 裁剪音頻並重新播放來實現
+            self._log_message(f"跳轉功能：pygame 不支持直接跳轉，目標時間 {int(target_time)}秒", "warning")
+    
     def _on_playback_end(self) -> None:
         """處理播放結束事件"""
         # 自動播放下一首
@@ -216,7 +231,7 @@ class MainWindow:
                         model_name=self.config.get("whisper_model", "base"),
                         device=self.config.get("device", "auto")
                     )
-                    self._log_message(f"✓ 轉錄完成: {filename}")
+                    self._log_message(f"✓ 轉錄完成: {filename}", "success")
                     
                     # 轉錄完成後再播放
                     self.player.play(audio_path)
@@ -225,7 +240,7 @@ class MainWindow:
                     # 更新播放按鈕狀態（播放中應顯示暫停圖標）
                     self.controls.update_pause_button(self.player.is_paused)
                 except Exception as e:
-                    self._log_message(f"✗ 轉錄失敗: {filename} - {str(e)}")
+                    self._log_message(f"✗ 轉錄失敗: {filename} - {str(e)}", "error")
                     # 即使轉錄失敗也播放（無字幕）
                     self.player.play(audio_path)
                     self.progress_bar.set_maximum(self.player.current_duration)
@@ -272,7 +287,7 @@ class MainWindow:
         
         # 顯示轉錄提示
         self.root.after(0, lambda: self.subtitle_display.update_subtitle(None))
-        self._log_message(f"檢測到缺少字幕，開始轉錄: {os.path.basename(audio_path)}")
+        self._log_message(f"檢測到缺少字幕，開始轉錄: {os.path.basename(audio_path)}", "info")
         
         # 標記為正在轉錄
         self._transcribing_files.add(audio_path)
@@ -312,7 +327,7 @@ class MainWindow:
     def _on_transcription_complete(self, audio_path: str) -> None:
         """轉錄完成後的處理"""
         # 記錄成功訊息
-        self._log_message(f"✓ 轉錄完成: {os.path.basename(audio_path)}")
+        self._log_message(f"✓ 轉錄完成: {os.path.basename(audio_path)}", "success")
         
         # 如果這是當前播放的檔案，重新載入字幕
         if self.player.current_file == audio_path:
@@ -321,11 +336,11 @@ class MainWindow:
                 # 更新播放列表顯示（加粗標記有字幕的檔案）
                 self.playlist_view._update_display()
             else:
-                self._log_message("警告: 字幕檔案已生成但載入失敗")
+                self._log_message("警告: 字幕檔案已生成但載入失敗", "warning")
     
     def _on_transcription_failed(self, audio_path: str, error: str) -> None:
         """轉錄失敗後的處理"""
-        self._log_message(f"✗ 轉錄失敗: {os.path.basename(audio_path)} - {error}")
+        self._log_message(f"✗ 轉錄失敗: {os.path.basename(audio_path)} - {error}", "error")
     
     def _transcribe_playlist_background(self, audio_files: list) -> None:
         """背景轉錄播放列表中的音頻"""
@@ -344,9 +359,30 @@ class MainWindow:
         
         threading.Thread(target=transcribe, daemon=True).start()
     
-    def _log_message(self, message: str) -> None:
-        """記錄訊息"""
-        self.conversion_messages.insert(tk.END, message + "\n")
+    def _log_message(self, message: str, message_type: str = "info") -> None:
+        """
+        記錄訊息（支持顏色分類）
+        
+        Args:
+            message: 訊息內容
+            message_type: 訊息類型 ("success", "warning", "error", "info")
+        """
+        # 定義顏色標籤
+        tags = {
+            "success": ("success_tag", "#2E7D32"),  # 綠色
+            "warning": ("warning_tag", "#F57C00"),  # 橙色
+            "error": ("error_tag", "#C62828"),      # 紅色
+            "info": ("info_tag", "#1976D2")         # 藍色
+        }
+        
+        # 確保標籤已配置
+        tag_name, color = tags.get(message_type, tags["info"])
+        if tag_name not in [tag for tag in self.conversion_messages.tag_names()]:
+            self.conversion_messages.tag_config(tag_name, foreground=color)
+        
+        # 插入訊息並應用標籤
+        start_pos = self.conversion_messages.index(tk.END)
+        self.conversion_messages.insert(tk.END, message + "\n", tag_name)
         self.conversion_messages.see(tk.END)
     
     def _on_close(self) -> None:
