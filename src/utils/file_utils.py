@@ -26,13 +26,13 @@ def find_audio_files(directory: str, extensions: Optional[List[str]] = None) -> 
     
     Args:
         directory: 目錄路徑
-        extensions: 音頻檔案副檔名列表，默認為 ['.mp3', '.m4a', '.wav']
+        extensions: 音頻檔案副檔名列表，默認為 ['.mp3', '.m4a', '.wav', '.wma']
     
     Returns:
         音頻檔案路徑列表（已排序）
     """
     if extensions is None:
-        extensions = ['.mp3', '.m4a', '.wav']
+        extensions = ['.mp3', '.m4a', '.wav', '.wma']
     
     if not os.path.isdir(directory):
         return []

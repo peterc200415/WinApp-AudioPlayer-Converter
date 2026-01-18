@@ -94,8 +94,9 @@ class MainWindow:
         if not directory_path:
             return
         
-        # 查找音頻檔案
-        audio_files = find_audio_files(directory_path)
+        # 查找音頻檔案（使用配置中支援的格式）
+        supported_formats = self.config.get("supported_formats", [".mp3", ".m4a", ".wav", ".wma"])
+        audio_files = find_audio_files(directory_path, extensions=supported_formats)
         if not audio_files:
             self._log_message("目錄中沒有找到音頻檔案")
             return
