@@ -6,5 +6,6 @@
     "subtitle_font_size": 14,
     "theme": "light",
     "auto_transcribe": false,
+    "auto_transcribe_on_play": true,
     "supported_formats": [".mp3", ".m4a", ".wav"]
 }

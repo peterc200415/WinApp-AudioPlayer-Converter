@@ -6,7 +6,8 @@
 
 - 🎵 播放多種音頻格式（MP3, M4A, WAV）
 - 📝 顯示 SRT 字幕檔案
-- 🎙️ 使用 Whisper 自動轉錄音頻為字幕
+- 🎙️ **即時自動轉錄**：播放沒有字幕的音頻時自動觸發轉錄
+- 🚀 **智能字幕載入**：轉錄完成後自動載入並顯示字幕
 - 📋 播放列表管理
 - 🔄 自動播放下一首
 - ⏯️ 播放控制（播放/暫停/上一首/下一首）
@@ -67,7 +68,10 @@ python -m src.main
 
 1. 點擊 "Play Directory" 選擇包含音頻檔案的目錄
 2. 應用程式會自動掃描並播放音頻檔案
-3. 如果有對應的 `.srt` 字幕檔案，會自動顯示
+3. **自動字幕處理**：
+   - 如果有對應的 `.srt` 字幕檔案，會自動顯示
+   - **如果沒有字幕，會自動觸發 Whisper 轉錄**（背景執行，不影響播放）
+   - 轉錄完成後字幕會自動載入並開始顯示
 4. 使用控制按鈕進行播放/暫停/切換等操作
 
 ## 配置
@@ -76,7 +80,8 @@ python -m src.main
 
 - `whisper_model`: Whisper 模型大小（tiny, base, small, medium, large）
 - `device`: 計算設備（auto, cuda, cpu）
-- `auto_transcribe`: 是否自動轉錄缺少字幕的音頻
+- `auto_transcribe`: 是否在播放目錄時背景批次轉錄所有音頻（false）
+- `auto_transcribe_on_play`: **播放時自動轉錄缺失的字幕（true，推薦）**
 - `font_size`: 字體大小
 - `subtitle_font_size`: 字幕字體大小
 

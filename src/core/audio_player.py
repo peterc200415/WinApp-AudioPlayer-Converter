@@ -42,6 +42,7 @@ class AudioPlayer:
         self.on_position_changed: Optional[Callable[[float], None]] = None
         self.on_subtitle_changed: Optional[Callable[[Optional[Subtitle]], None]] = None
         self.on_playback_end: Optional[Callable[[], None]] = None
+        self.on_subtitle_needed: Optional[Callable[[str], None]] = None  # 當需要轉錄字幕時觸發
         
         # 背景執行緒
         self._subtitle_thread: Optional[threading.Thread] = None
@@ -75,6 +76,9 @@ class AudioPlayer:
                 self.current_subtitles = SubtitleParser.parse_srt(srt_path)
             else:
                 self.current_subtitles = []
+                # 如果沒有字幕且回調存在，觸發轉錄請求
+                if self.on_subtitle_needed:
+                    self.on_subtitle_needed(file_path)
         except Exception as e:
             print(f"載入字幕失敗: {e}")
             self.current_subtitles = []
@@ -88,6 +92,35 @@ class AudioPlayer:
             self.current_duration = 0.0
         
         return True
+    
+    def reload_subtitles(self, file_path: Optional[str] = None) -> bool:
+        """
+        重新載入字幕檔案（用於轉錄完成後）
+        
+        Args:
+            file_path: 音頻檔案路徑，如果為 None 則使用當前檔案
+        
+        Returns:
+            是否成功載入
+        """
+        if file_path is None:
+            file_path = self.current_file
+        
+        if not file_path:
+            return False
+        
+        srt_path = get_srt_file_path(file_path)
+        try:
+            if os.path.exists(srt_path):
+                self.current_subtitles = SubtitleParser.parse_srt(srt_path)
+                return True
+            else:
+                self.current_subtitles = []
+                return False
+        except Exception as e:
+            print(f"重新載入字幕失敗: {e}")
+            self.current_subtitles = []
+            return False
     
     def play(self, file_path: Optional[str] = None) -> bool:
         """

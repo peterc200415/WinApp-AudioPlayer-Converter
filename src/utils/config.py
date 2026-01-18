@@ -19,7 +19,8 @@ class Config:
         "font_size": 15,
         "subtitle_font_size": 14,
         "theme": "light",
-        "auto_transcribe": False,
+        "auto_transcribe": False,  # 背景批次轉錄整個播放列表
+        "auto_transcribe_on_play": True,  # 播放時自動轉錄缺失的字幕
         "supported_formats": [".mp3", ".m4a", ".wav"]
     }
     
