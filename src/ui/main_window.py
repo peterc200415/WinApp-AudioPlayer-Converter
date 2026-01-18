@@ -196,6 +196,8 @@ class MainWindow:
             # 有字幕，直接播放
             self.player.play(audio_path)
             self.progress_bar.set_maximum(self.player.current_duration)
+            # 更新播放按鈕狀態（播放中應顯示暫停圖標）
+            self.controls.update_pause_button(self.player.is_paused)
         else:
             # 沒有字幕，先轉錄再播放
             auto_transcribe = self.config.get("auto_transcribe_on_play", True)
@@ -219,16 +221,22 @@ class MainWindow:
                     self.player.play(audio_path)
                     self.progress_bar.set_maximum(self.player.current_duration)
                     self.playlist_view._update_display()  # 更新列表顯示
+                    # 更新播放按鈕狀態（播放中應顯示暫停圖標）
+                    self.controls.update_pause_button(self.player.is_paused)
                 except Exception as e:
                     self._log_message(f"✗ 轉錄失敗: {filename} - {str(e)}")
                     # 即使轉錄失敗也播放（無字幕）
                     self.player.play(audio_path)
                     self.progress_bar.set_maximum(self.player.current_duration)
+                    # 更新播放按鈕狀態（播放中應顯示暫停圖標）
+                    self.controls.update_pause_button(self.player.is_paused)
             else:
                 # 未啟用自動轉錄，直接播放（無字幕）
                 self._log_message(f"未啟用自動轉錄，直接播放: {os.path.basename(audio_path)}")
                 self.player.play(audio_path)
                 self.progress_bar.set_maximum(self.player.current_duration)
+                # 更新播放按鈕狀態（播放中應顯示暫停圖標）
+                self.controls.update_pause_button(self.player.is_paused)
     
     def _auto_play_next(self) -> None:
         """自動播放下一首"""
