@@ -1,0 +1,10 @@
+{
+    "whisper_model": "base",
+    "device": "auto",
+    "translation_target": "zh-TW",
+    "font_size": 15,
+    "subtitle_font_size": 14,
+    "theme": "light",
+    "auto_transcribe": false,
+    "supported_formats": [".mp3", ".m4a", ".wav"]
+}

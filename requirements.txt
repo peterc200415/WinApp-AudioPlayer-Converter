@@ -1,0 +1,11 @@
+# 核心依賴
+pygame>=2.0.0
+pydub>=0.25.1
+openai-whisper>=20231117
+
+# 可選依賴（翻譯功能）
+deep-translator>=1.11.4
+
+# 開發依賴（可選）
+pytest>=7.0.0
+pytest-cov>=4.0.0
