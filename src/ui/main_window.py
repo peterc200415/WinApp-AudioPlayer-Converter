@@ -38,6 +38,10 @@ class MainWindow:
         self.player.on_subtitle_changed = self._on_subtitle_changed
         self.player.on_position_changed = self._on_position_changed
         self.player.on_playback_end = self._on_playback_end
+        self.player.on_subtitle_needed = self._on_subtitle_needed
+        
+        # 轉錄狀態追蹤
+        self._transcribing_files = set()  # 正在轉錄的檔案集合
         
         # 創建 UI 組件
         self._create_ui()
@@ -148,6 +152,80 @@ class MainWindow:
         if self.player.next_track():
             self.playlist_view.set_current_index(self.player.current_index)
             self.progress_bar.set_maximum(self.player.current_duration)
+    
+    def _on_subtitle_needed(self, audio_path: str) -> None:
+        """
+        處理需要轉錄字幕的情況（當播放沒有字幕的檔案時自動觸發）
+        
+        Args:
+            audio_path: 需要轉錄的音頻檔案路徑
+        """
+        # 檢查配置是否啟用自動轉錄
+        auto_transcribe = self.config.get("auto_transcribe_on_play", True)
+        if not auto_transcribe:
+            self._log_message(f"未啟用自動轉錄: {os.path.basename(audio_path)}")
+            return
+        
+        # 避免重複轉錄同一個檔案
+        if audio_path in self._transcribing_files:
+            return
+        
+        # 顯示轉錄提示
+        self.root.after(0, lambda: self.subtitle_display.update_subtitle(None))
+        self._log_message(f"檢測到缺少字幕，開始轉錄: {os.path.basename(audio_path)}")
+        
+        # 標記為正在轉錄
+        self._transcribing_files.add(audio_path)
+        
+        # 啟動背景轉錄（不阻塞播放）
+        import threading
+        threading.Thread(
+            target=self._transcribe_current_file,
+            args=(audio_path,),
+            daemon=True
+        ).start()
+    
+    def _transcribe_current_file(self, audio_path: str) -> None:
+        """
+        轉錄當前播放的檔案
+        
+        Args:
+            audio_path: 音頻檔案路徑
+        """
+        try:
+            srt_path = self.transcriber.transcribe_to_srt(
+                audio_path,
+                model_name=self.config.get("whisper_model", "base"),
+                device=self.config.get("device", "auto")
+            )
+            
+            # 轉錄完成，更新 UI 並重新載入字幕
+            self.root.after(0, self._on_transcription_complete, audio_path)
+            
+        except Exception as e:
+            # 轉錄失敗
+            self.root.after(0, self._on_transcription_failed, audio_path, str(e))
+        finally:
+            # 移除轉錄標記
+            self._transcribing_files.discard(audio_path)
+    
+    def _on_transcription_complete(self, audio_path: str) -> None:
+        """轉錄完成後的處理"""
+        # 記錄成功訊息
+        self._log_message(f"✓ 轉錄完成: {os.path.basename(audio_path)}")
+        
+        # 如果這是當前播放的檔案，重新載入字幕
+        if self.player.current_file == audio_path:
+            if self.player.reload_subtitles(audio_path):
+                self._log_message("字幕已載入並開始顯示")
+                # 更新播放列表顯示（加粗標記有字幕的檔案）
+                self.playlist_view._update_display()
+            else:
+                self._log_message("警告: 字幕檔案已生成但載入失敗")
+    
+    def _on_transcription_failed(self, audio_path: str, error: str) -> None:
+        """轉錄失敗後的處理"""
+        self._log_message(f"✗ 轉錄失敗: {os.path.basename(audio_path)} - {error}")
     
     def _transcribe_playlist_background(self, audio_files: list) -> None:
         """背景轉錄播放列表中的音頻"""
