@@ -21,7 +21,7 @@ class AudioPlayer:
     """音頻播放器核心類"""
     
     # 支持的音頻格式
-    SUPPORTED_FORMATS = ('.mp3', '.m4a', '.wav')
+    SUPPORTED_FORMATS = ('.mp3', '.m4a', '.wav', '.wma')
     
     def __init__(self):
         """初始化播放器"""
@@ -152,6 +152,9 @@ class AudioPlayer:
             elif file_ext == '.m4a':
                 if not self._convert_and_play_m4a():
                     return False
+            elif file_ext == '.wma':
+                if not self._convert_and_play_wma():
+                    return False
             else:
                 print(f"不支持的格式: {file_ext}")
                 return False
@@ -183,6 +186,23 @@ class AudioPlayer:
             return True
         except Exception as e:
             print(f"M4A 轉換失敗: {e}")
+            return False
+    
+    def _convert_and_play_wma(self) -> bool:
+        """將 WMA 轉換為 WAV 並播放"""
+        try:
+            audio = AudioSegment.from_file(self.current_file)
+            temp_wav_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            temp_wav_file.close()
+            audio.export(temp_wav_file.name, format="wav")
+            self.temp_files.append(temp_wav_file.name)
+            
+            pygame.mixer.music.load(temp_wav_file.name)
+            pygame.mixer.music.set_volume(self.volume)  # 設置音量
+            pygame.mixer.music.play()
+            return True
+        except Exception as e:
+            print(f"WMA 轉換失敗: {e}")
             return False
     
     def pause(self) -> None:
