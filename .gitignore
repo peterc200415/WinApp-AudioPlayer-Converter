@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Whisper 模型緩存（可選，如果要提交模型可刪除此項）
+.cache/
+
+# 臨時文件
+*.tmp
+*.temp
+*.log
+
+# 音頻和字幕文件（如果不想提交到倉庫）
+# *.mp3
+# *.m4a
+# *.wav
+# *.srt
+
+# 配置文件中的敏感信息（可選）
+# config/settings.json
+
+# 測試覆蓋率
+.coverage
+htmlcov/
+.pytest_cache/
