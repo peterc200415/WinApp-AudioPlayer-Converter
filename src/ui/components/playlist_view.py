@@ -23,6 +23,7 @@ class PlaylistView:
         """
         self.listbox = tk.Text(parent, width=width, height=height, wrap=tk.WORD)
         self.on_item_select: Optional[Callable[[int], None]] = None
+        self.has_subtitle_func: Callable[[str], bool] = has_srt_file
         
         # 禁用 Text widget 的默認選擇行為（避免藍色多選）
         self.listbox.config(selectbackground=self.listbox.cget('bg'), 
@@ -80,7 +81,7 @@ class PlaylistView:
         for i, file_path in enumerate(self._playlist):
             song_name = os.path.basename(file_path)
             
-            if has_srt_file(file_path):
+            if self.has_subtitle_func(file_path):
                 self.listbox.insert(tk.END, f"{i + 1}. {song_name}\n", 'bold')
             else:
                 self.listbox.insert(tk.END, f"{i + 1}. {song_name}\n")

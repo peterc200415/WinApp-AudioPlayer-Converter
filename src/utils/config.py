@@ -15,12 +15,22 @@ class Config:
     DEFAULT_CONFIG = {
         "whisper_model": "base",
         "device": "auto",  # "auto", "cuda", "cpu"
+        "whisper_language": "auto",  # "auto" or explicit language code, e.g. "zh", "en"
+        "whisper_beam_size": 1,
+        "whisper_best_of": 1,
         "translation_target": "zh-TW",
         "font_size": 15,
         "subtitle_font_size": 14,
         "theme": "light",
         "auto_transcribe": False,  # 背景批次轉錄整個播放列表
         "auto_transcribe_on_play": True,  # 播放時自動轉錄缺失的字幕
+        "enable_subtitle_preview": True,
+        "subtitle_preview_seconds": 20,
+        "subtitle_preview_model": "tiny",
+        "enable_full_transcription": True,
+        "subtitle_chunk_lead_seconds": 12,
+        "base_chunk_seconds": 45,
+        "upgrade_start_after_seconds": 60,
         "supported_formats": [".mp3", ".m4a", ".wav", ".wma"]
     }
     
