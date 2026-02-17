@@ -1,121 +1,96 @@
 # WinApp Audio Player Converter
 
-一個功能完整的音頻播放器，支援字幕顯示和自動轉錄功能。
+WinApp 桌面音頻播放器，支援播放清單、字幕顯示與 Whisper 自動轉錄。
 
-## 功能特性
+## 目前重點
 
-- 🎵 播放多種音頻格式（MP3, M4A, WAV, WMA）
-- 📝 顯示 SRT 字幕檔案
-- 🎙️ **即時自動轉錄**：播放沒有字幕的音頻時自動觸發轉錄
-- 🚀 **智能字幕載入**：轉錄完成後自動載入並顯示字幕
-- 📋 播放列表管理
-- 🔄 自動播放下一首
-- ⏯️ 播放控制（播放/暫停/上一首/下一首）
+- Qt 商業化 UI（`PySide6`）為預設入口
+- 穩定字幕策略：固定使用 `base` 模型（避免切換模型造成不穩）
+- 無字幕音檔可在播放中背景轉錄，不阻塞播放
+- 支援 MP3 / M4A / WAV / WMA
 
-## 項目結構
+## 快速開始
 
-```
-WinApp-AudioPlayer-Converter/
-├── src/
-│   ├── core/              # 核心業務邏輯
-│   │   ├── audio_player.py
-│   │   ├── subtitle_parser.py
-│   │   └── transcriber.py
-│   ├── ui/                # 用戶界面
-│   │   ├── main_window.py
-│   │   └── components/
-│   └── utils/             # 工具模組
-│       ├── config.py
-│       ├── file_utils.py
-│       └── time_utils.py
-├── config/                # 配置文件
-│   └── settings.json
-├── requirements.txt
-└── README.md
-```
+1. 安裝 Python 3.10+（建議）
+2. 安裝套件：
 
-## 安裝
-
-1. 安裝 Python 3.8 或更高版本
-
-2. 安裝依賴：
 ```bash
 pip install -r requirements.txt
 ```
 
-3. 安裝 FFmpeg（用於音頻處理）：
-   - Windows: 下載並添加到 PATH
+3. 安裝 FFmpeg 並加入 PATH
+   - Windows: `C:\ffmpeg\bin`
    - macOS: `brew install ffmpeg`
    - Linux: `sudo apt-get install ffmpeg`
 
-## 使用
+4. 啟動：
 
-運行應用程式（推薦從專案根目錄）：
 ```bash
 python main.py
 ```
 
-其他運行方式：
-```bash
-# 直接運行 src/main.py（已自動處理路徑）
-python src/main.py
+## 介面與操作
 
-# 或使用模組方式運行
-python -m src.main
-```
+- `Open Folder`: 載入音樂目錄（重新載入會停止目前播放與背景轉錄）
+- `Play / Prev / Next`: 播放控制
+- 雙擊播放清單項目可直接切歌
+- `Settings`: Whisper 模型、裝置、語言、字幕策略、字體大小
+- 下方 `Log` 區會顯示轉錄/模型載入訊息（例如 `Loading Whisper model: base, device: cpu`）
 
-### 基本操作
+## 字幕策略（Qt 版）
 
-1. 點擊 "Play Directory" 選擇包含音頻檔案的目錄
-2. 應用程式會自動掃描並播放音頻檔案
-3. **自動字幕處理**：
-   - 如果有對應的 `.srt` 字幕檔案，會自動顯示
-   - **如果沒有字幕，會自動觸發 Whisper 轉錄**（背景執行，不影響播放）
-   - 轉錄完成後字幕會自動載入並開始顯示
-4. 使用控制按鈕進行播放/暫停/切換等操作
+預設使用固定 `base` 分段轉錄：
 
-## 配置
+1. 播放時即時分段排程，避免整首等待
+2. 不切換模型，減少載入/切換帶來的錯誤風險
 
-編輯 `config/settings.json` 可以調整設定：
+字幕區顯示規則：
 
-- `whisper_model`: Whisper 模型大小（tiny, base, small, medium, large）
-- `device`: 計算設備（auto, cuda, cpu）
-- `auto_transcribe`: 是否在播放目錄時背景批次轉錄所有音頻（false）
-- `auto_transcribe_on_play`: **播放時自動轉錄缺失的字幕（true，推薦）**
-- `font_size`: 字體大小
+- 正在播放的字幕：亮色 + 粗體
+- 已播放字幕：淡色
+- `Generating subtitles...` 在第一句真字幕出現後會移除
+
+## GPU / CPU 說明
+
+- `device=auto` 為 GPU-first；若 CUDA 不相容會自動回退 CPU
+- 舊 GPU（例如 GTX 1060, `sm_61`）在新 PyTorch CUDA 版本可能不支援，會回退 CPU
+- 回退狀態會寫到 Log
+
+## 主要設定
+
+編輯 `config/settings.json`：
+
+- `whisper_model`: `tiny/base/small/medium/large`
+- `device`: `auto/cuda/cpu`
+- `whisper_language`: `auto/zh/en/...`
+- `whisper_beam_size`, `whisper_best_of`: 解碼參數（越小越快）
+- `subtitle_preview_model`: 預覽模型（固定 `base`）
+- `subtitle_preview_seconds`: 每段秒數
+- `subtitle_chunk_lead_seconds`: 提前排程秒數
+- `enable_full_transcription`: 是否啟用 base 背景升級
+- `base_chunk_seconds`: base 每段秒數
+- `upgrade_start_after_seconds`: 分段升級起始秒數（預設 60）
 - `subtitle_font_size`: 字幕字體大小
+- `auto_transcribe_on_play`: 播放時自動轉錄
 
-## 模組說明
+## 專案結構
 
-### Core 模組
-
-- **AudioPlayer**: 音頻播放核心類，管理播放狀態和播放列表
-- **SubtitleParser**: 解析 SRT 字幕檔案
-- **Transcriber**: Whisper 轉錄封裝（單例模式）
-
-### UI 組件
-
-- **MainWindow**: 主視窗，整合所有組件
-- **SubtitleDisplay**: 字幕顯示組件
-- **PlaylistView**: 播放列表視圖
-- **PlayerControls**: 播放控制按鈕
-- **ProgressBar**: 播放進度條
-
-### Utils 模組
-
-- **Config**: 配置管理類
-- **FileUtils**: 檔案操作工具
-- **TimeUtils**: 時間格式化工具
-
-## 開發
-
-項目採用模組化架構設計：
-
-- 使用類別封裝代替全局變數
-- 清晰的模組分層（core/ui/utils）
-- 回調機制實現組件通信
-- 單例模式優化資源使用
+```
+src/
+├── core/
+│   ├── audio_player.py
+│   ├── subtitle_parser.py
+│   └── transcriber.py
+├── ui/
+│   └── ... (Tk 版)
+├── ui_qt/
+│   └── main_window.py (Qt 主介面)
+└── utils/
+    ├── config.py
+    ├── file_utils.py
+    └── time_utils.py
+```
 
 ## 授權
 
-MIT License
+MIT

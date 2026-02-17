@@ -51,9 +51,14 @@ class SubtitleDisplay:
         
         if subtitle:
             self.text_area.insert(tk.END, subtitle.text)
-        else:
-            self.text_area.insert(tk.END, "未找到相關字幕文件")
         
+        self.text_area.config(state='disabled')
+
+    def show_status(self, message: str) -> None:
+        """顯示狀態訊息（例如：轉錄中/失敗）。"""
+        self.text_area.config(state='normal')
+        self.text_area.delete(1.0, tk.END)
+        self.text_area.insert(tk.END, message)
         self.text_area.config(state='disabled')
     
     def clear(self) -> None:
