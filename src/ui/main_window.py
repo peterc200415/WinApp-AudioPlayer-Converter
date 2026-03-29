@@ -487,7 +487,13 @@ class MainWindow:
                 "wav",
                 tmp_path,
             ]
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+            )
             if proc.returncode != 0:
                 try:
                     os.remove(tmp_path)

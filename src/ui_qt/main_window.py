@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import queue
 import subprocess
 import tempfile
-import threading
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +21,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -35,7 +35,9 @@ from PySide6.QtWidgets import (
 
 from src.core.audio_player import AudioPlayer
 from src.core.subtitle_parser import Subtitle
+from src.core.track_rename_service import RenamePreview, TrackRenameService
 from src.core.transcriber import Transcriber
+from src.core.transcription_manager import TranscriptionManager
 from src.utils.config import Config
 from src.utils.file_utils import find_audio_files
 from src.utils.time_utils import format_timestamp
@@ -52,7 +54,7 @@ class SettingsDialog(QDialog):
 
         self.model_combo = QComboBox()
         self.model_combo.addItems(["base"])
-        self.model_combo.setCurrentText("base")
+        self.model_combo.setCurrentText(self.config.get("whisper_model", "base"))
         self.model_combo.setEnabled(False)
 
         self.device_combo = QComboBox()
@@ -104,9 +106,9 @@ class SettingsDialog(QDialog):
         form.addRow("Beam Size", self.beam_spin)
         form.addRow("Best Of", self.best_of_spin)
         form.addRow("Subtitle Font", self.font_spin)
-        form.addRow("Tiny Chunk (s)", self.preview_chunk_spin)
+        form.addRow("Preview Chunk (s)", self.preview_chunk_spin)
         form.addRow("Chunk Lead (s)", self.lead_spin)
-        form.addRow("Base Chunk (s)", self.base_chunk_spin)
+        form.addRow("Upgrade Chunk (s)", self.base_chunk_spin)
         form.addRow("Upgrade Start (s)", self.upgrade_start_spin)
         form.addRow("", self.auto_checkbox)
         form.addRow("", self.full_checkbox)
@@ -117,8 +119,9 @@ class SettingsDialog(QDialog):
         form.addRow(buttons)
 
     def apply(self) -> None:
-        self.config.set("whisper_model", self.model_combo.currentText())
-        self.config.set("subtitle_preview_model", "base")
+        model_name = self.model_combo.currentText()
+        self.config.set("whisper_model", model_name)
+        self.config.set("subtitle_preview_model", model_name)
         self.config.set("device", self.device_combo.currentText())
         self.config.set("whisper_language", self.language_combo.currentText().strip() or "auto")
         self.config.set("whisper_beam_size", int(self.beam_spin.value()))
@@ -133,12 +136,167 @@ class SettingsDialog(QDialog):
         self.config.save()
 
 
+class RenamePreviewDialog(QDialog):
+    def __init__(
+        self,
+        previews: list[RenamePreview],
+        rename_service: TrackRenameService,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.previews = previews
+        self.rename_service = rename_service
+        self.applied_changes: list[tuple[str, str]] = []
+
+        self.setWindowTitle("Identify & Rename Tracks")
+        self.resize(980, 520)
+
+        layout = QVBoxLayout(self)
+
+        hint = QLabel("Review the suggested source match and filename before applying changes.")
+        layout.addWidget(hint)
+
+        self.table = QTreeWidget()
+        self.table.setHeaderLabels(["Current File", "Detected Query", "Matched Source", "Suggested Name", "Status"])
+        self.table.setRootIsDecorated(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setColumnWidth(0, 230)
+        self.table.setColumnWidth(1, 220)
+        self.table.setColumnWidth(2, 220)
+        self.table.setColumnWidth(3, 240)
+        self.table.itemChanged.connect(self._on_item_changed)
+        layout.addWidget(self.table, 1)
+
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        self.apply_button = QPushButton("Apply Rename")
+        buttons.addButton(self.apply_button, QDialogButtonBox.AcceptRole)
+        buttons.rejected.connect(self.reject)
+        self.apply_button.clicked.connect(self._apply_selected)
+        layout.addWidget(buttons)
+
+        self._populate()
+
+    def _populate(self) -> None:
+        for preview in self.previews:
+            match = preview.match
+            source = ""
+            suggestion = ""
+            status = preview.error or "Ready"
+            if match is not None:
+                release_text = f" / {match.release}" if match.release else ""
+                source = f"{match.artist} - {match.title}{release_text}"
+                suggestion = match.suggested_name
+                status = match.reason
+
+            item = QTreeWidgetItem(
+                [
+                    preview.current_name,
+                    preview.detected_query or "(empty)",
+                    source or "(no match)",
+                    suggestion,
+                    status,
+                ]
+            )
+            item.setCheckState(0, Qt.Checked if match is not None else Qt.Unchecked)
+            item.setData(0, Qt.UserRole, preview)
+            if match is None:
+                item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
+            self.table.addTopLevelItem(item)
+
+        self._refresh_summary()
+
+    def _refresh_summary(self) -> None:
+        total = len(self.previews)
+        matched = 0
+        no_match = 0
+        selected = 0
+        renamed = 0
+        failed = 0
+
+        for index in range(self.table.topLevelItemCount()):
+            item = self.table.topLevelItem(index)
+            preview = item.data(0, Qt.UserRole)
+            if not isinstance(preview, RenamePreview):
+                continue
+
+            status = item.text(4)
+            if preview.match is not None:
+                matched += 1
+            else:
+                no_match += 1
+
+            if item.checkState(0) == Qt.Checked:
+                selected += 1
+            if status == "Renamed":
+                renamed += 1
+            if status.startswith("Rename failed:"):
+                failed += 1
+
+        self.summary.setText(
+            f"Total: {total} | Matched: {matched} | No Match: {no_match} | "
+            f"Selected: {selected} | Renamed: {renamed} | Failed: {failed}"
+        )
+        self.apply_button.setEnabled(selected > 0)
+
+    def _on_item_changed(self, _item: QTreeWidgetItem, _column: int) -> None:
+        self._refresh_summary()
+
+    def _apply_selected(self) -> None:
+        applied = 0
+        failures = []
+        attempted = 0
+        for index in range(self.table.topLevelItemCount()):
+            item = self.table.topLevelItem(index)
+            preview = item.data(0, Qt.UserRole)
+            if not isinstance(preview, RenamePreview):
+                continue
+            if preview.match is None or item.checkState(0) != Qt.Checked:
+                continue
+            attempted += 1
+            try:
+                new_path = self.rename_service.apply_rename(preview)
+            except Exception as exc:
+                failures.append(f"{preview.current_name}: {exc}")
+                item.setText(4, f"Rename failed: {exc}")
+                continue
+
+            applied += 1
+            self.applied_changes.append((preview.path, new_path))
+            preview.path = new_path
+            preview.current_name = Path(new_path).name
+            item.setText(0, preview.current_name)
+            item.setText(4, "Renamed")
+            item.setCheckState(0, Qt.Unchecked)
+
+        self._refresh_summary()
+
+        if parent := self.parent():
+            if hasattr(parent, "_append_log"):
+                parent._append_log(f"Rename apply finished: {applied}/{attempted} succeeded")
+            for message in failures[:10]:
+                if hasattr(parent, "_append_log"):
+                    parent._append_log(f"[Rename] {message}")
+
+        if failures:
+            QMessageBox.warning(self, "Rename Completed With Errors", "\n".join(failures[:10]))
+        elif applied:
+            QMessageBox.information(self, "Rename Completed", f"Renamed {applied} track(s).")
+        else:
+            QMessageBox.information(self, "No Changes", "No selected tracks were renamed.")
+
+
 class MainWindow(QMainWindow):
     subtitle_signal = Signal(object)
     position_signal = Signal(float)
-    transcribe_done_signal = Signal(str, object, str)
     playback_end_signal = Signal()
     transcriber_info_signal = Signal(str)
+    transcription_started_signal = Signal(str)
+    transcription_ready_signal = Signal(str, str)
+    transcription_failed_signal = Signal(str, str, str)
 
     def __init__(self):
         app = QApplication.instance()
@@ -146,11 +304,10 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.config = Config()
-        # Stabilize transcription pipeline: force single-model mode.
-        self.config.set("whisper_model", "base")
-        self.config.set("subtitle_preview_model", "base")
         self.player = AudioPlayer()
         self.transcriber = Transcriber()
+        self.rename_service = TrackRenameService()
+        self.transcription_manager = TranscriptionManager(self.player, self.transcriber, self.config)
 
         self.player.on_subtitle_changed = self._on_subtitle_changed
         self.player.on_position_changed = self._on_position_changed
@@ -159,32 +316,32 @@ class MainWindow(QMainWindow):
 
         self.subtitle_signal.connect(self._apply_subtitle)
         self.position_signal.connect(self._apply_position)
-        self.transcribe_done_signal.connect(self._on_transcribe_done)
         self.playback_end_signal.connect(self._handle_playback_end)
         self.transcriber_info_signal.connect(self._append_log)
+        self.transcription_started_signal.connect(self._on_transcription_started)
+        self.transcription_ready_signal.connect(self._on_transcription_ready)
+        self.transcription_failed_signal.connect(self._on_transcription_failed)
+
         self.transcriber.on_info = lambda message: self.transcriber_info_signal.emit(message)
+        self.transcription_manager.on_transcription_started = (
+            lambda path: self.transcription_started_signal.emit(path)
+        )
+        self.transcription_manager.on_transcription_ready = (
+            lambda path, model: self.transcription_ready_signal.emit(path, model)
+        )
+        self.transcription_manager.on_transcription_failed = (
+            lambda path, model, error: self.transcription_failed_signal.emit(path, model, error)
+        )
 
-        self._lock = threading.Lock()
-        self._current_generation = 0
         self._active_path: Optional[str] = None
-        self._was_playing_track: bool = False
-        self._handling_auto_next: bool = False
-        self._closing_ui: bool = False
-        self._loading_folder: bool = False
-        self._transcribing_paths: set[str] = set()
-        self._inflight: set[tuple[str, int, str, int]] = set()
-        self._tiny_next_start: dict[str, int] = {}
-        self._base_next_start: dict[str, int] = {}
+        self._was_playing_track = False
+        self._handling_auto_next = False
+        self._closing_ui = False
+        self._loading_folder = False
 
-        self._urgent_queue: "queue.Queue[Optional[dict]]" = queue.Queue()
-        self._bg_queue: "queue.Queue[Optional[dict]]" = queue.Queue()
-        self._worker_stop = threading.Event()
-        self._worker = threading.Thread(target=self._transcription_worker, daemon=True)
-        self._worker.start()
-
-        self._last_subtitle_text: str = ""
-        self._last_status_text: str = ""
-        self._status_active: bool = False
+        self._last_subtitle_text = ""
+        self._last_status_text = ""
+        self._status_active = False
         self._current_sub_key: Optional[tuple[float, float]] = None
         self._current_block_no: Optional[int] = None
 
@@ -205,108 +362,285 @@ class MainWindow(QMainWindow):
 
         self._scheduler = QTimer(self)
         self._scheduler.setInterval(500)
-        self._scheduler.timeout.connect(self._tick_transcription_scheduler)
+        self._scheduler.timeout.connect(self._tick)
         self._scheduler.start()
 
         self.setWindowTitle("WinApp Audio Studio")
-        self.resize(1100, 760)
+        self.resize(980, 700)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(14)
 
+        header_row = QHBoxLayout()
+        header_row.setSpacing(12)
+        header_stack = QVBoxLayout()
+        header_stack.setSpacing(2)
         self.title_label = QLabel("WinApp Audio Studio")
-        self.title_label.setStyleSheet("font-size:24px;font-weight:700;color:#f2f6ff;")
-        layout.addWidget(self.title_label)
+        self.title_label.setObjectName("heroTitle")
+        self.hero_subtitle = QLabel("Play, subtitle, identify, and rename your tracks in one place.")
+        self.hero_subtitle.setObjectName("heroSubtitle")
+        header_stack.addWidget(self.title_label)
+        header_stack.addWidget(self.hero_subtitle)
+        header_row.addLayout(header_stack, 1)
+
+        self.badge_label = QLabel("Desktop Mix")
+        self.badge_label.setObjectName("heroBadge")
+        self.badge_label.setAlignment(Qt.AlignCenter)
+        header_row.addWidget(self.badge_label)
+
+        self.btn_theme = QPushButton()
+        self.btn_theme.setObjectName("themeToggle")
+        self.btn_theme.clicked.connect(self._toggle_theme)
+        header_row.addWidget(self.btn_theme)
+        layout.addLayout(header_row)
+
+        now_playing_card = QWidget()
+        now_playing_card.setObjectName("card")
+        now_playing_layout = QVBoxLayout(now_playing_card)
+        now_playing_layout.setContentsMargins(18, 18, 18, 16)
+        now_playing_layout.setSpacing(10)
+        now_playing_title = QLabel("Now Playing")
+        now_playing_title.setObjectName("sectionTitle")
+        now_playing_layout.addWidget(now_playing_title)
 
         self.subtitle_box = QTextEdit()
         self.subtitle_box.setReadOnly(True)
-        self.subtitle_box.setMinimumHeight(260)
+        self.subtitle_box.setMinimumHeight(180)
+        self.subtitle_box.setMaximumHeight(240)
         self.subtitle_box.setLineWrapMode(QTextEdit.WidgetWidth)
-        self.subtitle_box.setFont(QFont("Microsoft YaHei UI", max(14, int(self.config.get("subtitle_font_size", 14)))))
-        layout.addWidget(self.subtitle_box)
+        self.subtitle_box.setFont(
+            QFont("Microsoft YaHei UI", max(14, int(self.config.get("subtitle_font_size", 14))))
+        )
+        self.subtitle_box.setObjectName("subtitleBox")
+        now_playing_layout.addWidget(self.subtitle_box)
 
         self.time_label = QLabel("00:00:00 / 00:00:00")
-        layout.addWidget(self.time_label)
+        self.time_label.setObjectName("timeLabel")
+        now_playing_layout.addWidget(self.time_label)
 
         self.progress = QSlider(Qt.Horizontal)
         self.progress.setEnabled(False)
-        layout.addWidget(self.progress)
+        now_playing_layout.addWidget(self.progress)
+        layout.addWidget(now_playing_card)
 
-        row = QHBoxLayout()
+        controls_card = QWidget()
+        controls_card.setObjectName("card")
+        row = QHBoxLayout(controls_card)
+        row.setContentsMargins(18, 14, 18, 14)
+        row.setSpacing(10)
         self.btn_open = QPushButton("Open Folder")
         self.btn_prev = QPushButton("Prev")
         self.btn_play = QPushButton("Play")
         self.btn_next = QPushButton("Next")
+        self.btn_rename = QPushButton("Identify & Rename")
         self.btn_settings = QPushButton("Settings")
+        self.btn_play.setObjectName("primaryButton")
+        self.btn_rename.setObjectName("accentButton")
         row.addWidget(self.btn_open)
         row.addWidget(self.btn_prev)
         row.addWidget(self.btn_play)
         row.addWidget(self.btn_next)
+        row.addWidget(self.btn_rename)
         row.addWidget(self.btn_settings)
         row.addStretch(1)
-        row.addWidget(QLabel("Volume"))
+        volume_label = QLabel("Volume")
+        volume_label.setObjectName("mutedLabel")
+        row.addWidget(volume_label)
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setRange(0, 100)
         self.volume.setValue(100)
+        self.volume.setMaximumWidth(150)
         row.addWidget(self.volume)
-        layout.addLayout(row)
+        layout.addWidget(controls_card)
+
+        library_card = QWidget()
+        library_card.setObjectName("card")
+        library_layout = QVBoxLayout(library_card)
+        library_layout.setContentsMargins(18, 18, 18, 16)
+        library_layout.setSpacing(10)
+        library_title = QLabel("Library")
+        library_title.setObjectName("sectionTitle")
+        library_layout.addWidget(library_title)
 
         self.playlist = QTreeWidget()
         self.playlist.setHeaderLabels(["#", "Track", "Duration", "Subtitles", "Task"])
         self.playlist.setRootIsDecorated(False)
         self.playlist.setAlternatingRowColors(True)
         self.playlist.setColumnWidth(0, 44)
-        self.playlist.setColumnWidth(1, 360)
+        self.playlist.setColumnWidth(1, 320)
         self.playlist.setColumnWidth(2, 92)
         self.playlist.setColumnWidth(3, 90)
         self.playlist.setColumnWidth(4, 100)
-        self.playlist.setMinimumHeight(420)
-        layout.addWidget(self.playlist, 1)
+        self.playlist.setMinimumHeight(280)
+        self.playlist.setMaximumHeight(360)
+        library_layout.addWidget(self.playlist)
+        layout.addWidget(library_card, 1)
+
+        log_card = QWidget()
+        log_card.setObjectName("card")
+        log_layout = QVBoxLayout(log_card)
+        log_layout.setContentsMargins(18, 16, 18, 14)
+        log_layout.setSpacing(8)
+        log_title = QLabel("Activity")
+        log_title.setObjectName("sectionTitle")
+        log_layout.addWidget(log_title)
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(60)
-        self.log.setMaximumHeight(80)
-        layout.addWidget(self.log)
+        self.log.setMinimumHeight(88)
+        self.log.setMaximumHeight(112)
+        self.log.setObjectName("logBox")
+        log_layout.addWidget(self.log)
+        layout.addWidget(log_card)
 
         self.btn_open.clicked.connect(self._open_folder)
         self.btn_play.clicked.connect(self._toggle_play)
         self.btn_prev.clicked.connect(self._prev)
         self.btn_next.clicked.connect(self._next)
+        self.btn_rename.clicked.connect(self._identify_and_rename_tracks)
         self.playlist.itemDoubleClicked.connect(self._play_item)
         self.btn_settings.clicked.connect(self._open_settings)
         self.volume.valueChanged.connect(lambda v: self.player.set_volume(v / 100.0))
+        self._sync_theme_button()
 
     def _apply_theme(self) -> None:
-        self.setStyleSheet(
-            """
-            QMainWindow { background: #0f172a; }
-            QLabel { color: #d5e1ff; }
-            QPushButton { background: #1f3d67; color: #e8f1ff; border: 1px solid #325f96; border-radius: 8px; padding: 6px 10px; font-weight: 600; }
-            QPushButton:hover { background: #285084; }
-            QTextEdit { background: #0e1a2f; color: #f4f8ff; border: 1px solid #2c4e7e; border-radius: 8px; }
-            QTreeWidget { background: #0f1d35; color: #e6eeff; border: 1px solid #2a4a78; border-radius: 8px; alternate-background-color: #13233d; }
-            QSlider::groove:horizontal { height: 6px; background: #24406b; border-radius: 3px; }
-            QSlider::handle:horizontal { width: 14px; margin: -5px 0; border-radius: 7px; background: #66b6ff; border: 1px solid #9fd4ff; }
-            QDialog { background: #111c32; color: #d5e1ff; }
-            QComboBox, QSpinBox { background: #0f1d35; color: #e6eeff; border: 1px solid #325f96; border-radius: 6px; padding: 4px; }
-            """
-        )
+        theme = str(self.config.get("theme", "light")).lower()
+        self.setStyleSheet(self._dark_theme_stylesheet() if theme == "dark" else self._light_theme_stylesheet())
+        self._sync_theme_button()
+
+    def _light_theme_stylesheet(self) -> str:
+        return """
+            QMainWindow {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #fff5ef, stop:0.45 #ffe5da, stop:1 #ffd8cc);
+            }
+            QWidget#card {
+                background: rgba(255, 252, 248, 0.92);
+                border: 1px solid rgba(236, 181, 158, 0.72);
+                border-radius: 18px;
+            }
+            QLabel { color: #4d2f38; }
+            QLabel#heroTitle { font-size: 30px; font-weight: 800; color: #2d1d2f; }
+            QLabel#heroSubtitle { font-size: 13px; color: #8f5f65; }
+            QLabel#heroBadge {
+                background: #ff7f50; color: white; border-radius: 14px;
+                padding: 8px 14px; font-size: 12px; font-weight: 700;
+            }
+            QLabel#sectionTitle { font-size: 15px; font-weight: 700; color: #5e3043; }
+            QLabel#mutedLabel, QLabel#timeLabel { color: #93656c; font-size: 12px; }
+            QPushButton {
+                background: #ffffff; color: #4d2f38; border: 1px solid #efb19a;
+                border-radius: 12px; padding: 8px 14px; font-weight: 700;
+            }
+            QPushButton:hover { background: #fff3ee; }
+            QPushButton#primaryButton { background: #ff8c61; color: #ffffff; border: 1px solid #ff8c61; }
+            QPushButton#primaryButton:hover { background: #ff7a4c; }
+            QPushButton#accentButton { background: #ffd166; color: #4d2f38; border: 1px solid #f2bf3d; }
+            QPushButton#accentButton:hover { background: #ffca4a; }
+            QPushButton#themeToggle {
+                background: rgba(255,255,255,0.78); color: #4d2f38; min-width: 108px;
+            }
+            QTextEdit, QTreeWidget {
+                background: rgba(255, 255, 255, 0.9); color: #402830; border: 1px solid #f0c4b1;
+                border-radius: 14px; alternate-background-color: #fff7f3;
+            }
+            QTextEdit#subtitleBox { font-size: 15px; }
+            QTextEdit#logBox { color: #6b4750; }
+            QHeaderView::section {
+                background: #fff0e8; color: #7d4d5a; border: none; padding: 8px; font-weight: 700;
+            }
+            QSlider::groove:horizontal { height: 8px; background: #f6c7b3; border-radius: 4px; }
+            QSlider::handle:horizontal {
+                width: 18px; margin: -6px 0; border-radius: 9px; background: #ff7f50; border: 2px solid #ffffff;
+            }
+            QDialog { background: #fff8f4; color: #4d2f38; }
+            QComboBox, QSpinBox {
+                background: #ffffff; color: #4d2f38; border: 1px solid #efb19a;
+                border-radius: 10px; padding: 6px 8px;
+            }
+        """
+
+    def _dark_theme_stylesheet(self) -> str:
+        return """
+            QMainWindow {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #131722, stop:0.55 #1a2030, stop:1 #242030);
+            }
+            QWidget#card {
+                background: rgba(27, 33, 49, 0.94);
+                border: 1px solid rgba(88, 102, 143, 0.72);
+                border-radius: 18px;
+            }
+            QLabel { color: #e9edf7; }
+            QLabel#heroTitle { font-size: 30px; font-weight: 800; color: #ffffff; }
+            QLabel#heroSubtitle { font-size: 13px; color: #aab4d0; }
+            QLabel#heroBadge {
+                background: #7c5cff; color: white; border-radius: 14px;
+                padding: 8px 14px; font-size: 12px; font-weight: 700;
+            }
+            QLabel#sectionTitle { font-size: 15px; font-weight: 700; color: #f3f6ff; }
+            QLabel#mutedLabel, QLabel#timeLabel { color: #a2adcb; font-size: 12px; }
+            QPushButton {
+                background: #242d44; color: #f0f4ff; border: 1px solid #445174;
+                border-radius: 12px; padding: 8px 14px; font-weight: 700;
+            }
+            QPushButton:hover { background: #2d3752; }
+            QPushButton#primaryButton { background: #ff8c61; color: #ffffff; border: 1px solid #ff8c61; }
+            QPushButton#primaryButton:hover { background: #ff7a4c; }
+            QPushButton#accentButton { background: #7c5cff; color: #ffffff; border: 1px solid #7c5cff; }
+            QPushButton#accentButton:hover { background: #6b4df0; }
+            QPushButton#themeToggle {
+                background: rgba(36,45,68,0.9); color: #f0f4ff; min-width: 108px;
+            }
+            QTextEdit, QTreeWidget {
+                background: rgba(18, 24, 38, 0.9); color: #edf2ff; border: 1px solid #3b486c;
+                border-radius: 14px; alternate-background-color: #1b2438;
+            }
+            QTextEdit#subtitleBox { font-size: 15px; }
+            QTextEdit#logBox { color: #c5d0ef; }
+            QHeaderView::section {
+                background: #232c43; color: #d7e1ff; border: none; padding: 8px; font-weight: 700;
+            }
+            QSlider::groove:horizontal { height: 8px; background: #36425f; border-radius: 4px; }
+            QSlider::handle:horizontal {
+                width: 18px; margin: -6px 0; border-radius: 9px; background: #7c5cff; border: 2px solid #ffffff;
+            }
+            QDialog { background: #1a2131; color: #edf2ff; }
+            QComboBox, QSpinBox {
+                background: #20293d; color: #edf2ff; border: 1px solid #445174;
+                border-radius: 10px; padding: 6px 8px;
+            }
+        """
+
+    def _toggle_theme(self) -> None:
+        next_theme = "dark" if str(self.config.get("theme", "light")).lower() == "light" else "light"
+        self.config.set("theme", next_theme)
+        self.config.save()
+        self._apply_theme()
+        self._append_log(f"Theme switched to {next_theme}")
+
+    def _sync_theme_button(self) -> None:
+        if hasattr(self, "btn_theme"):
+            is_dark = str(self.config.get("theme", "light")).lower() == "dark"
+            self.btn_theme.setText("Light Mode" if is_dark else "Dark Mode")
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self.config, self)
         if dlg.exec() == QDialog.Accepted:
             dlg.apply()
-            self.subtitle_box.setFont(QFont("Microsoft YaHei UI", max(14, int(self.config.get("subtitle_font_size", 14)))))
+            self.subtitle_box.setFont(
+                QFont("Microsoft YaHei UI", max(14, int(self.config.get("subtitle_font_size", 14))))
+            )
             self.log.append("Settings saved")
 
     def _open_folder(self) -> None:
         self._loading_folder = True
         try:
-            # Stop current playback and transcription when loading a new folder.
-            self._cancel_active_transcription()
+            self.transcription_manager.cancel_active()
             self.player.stop()
             self.player.current_file = None
             self.player.current_subtitles = []
@@ -326,10 +660,10 @@ class MainWindow(QMainWindow):
             self.playlist.clear()
             self._reset_playback_ui()
 
-            for i, f in enumerate(files, start=1):
-                subtitle_state = "Ready" if self.player.has_subtitles(f) else "Missing"
-                item = QTreeWidgetItem([str(i), Path(f).name, "--:--", subtitle_state, "Idle"])
-                item.setData(0, Qt.UserRole, f)
+            for index, file_path in enumerate(files, start=1):
+                subtitle_state = "Ready" if self.player.has_subtitles(file_path) else "Missing"
+                item = QTreeWidgetItem([str(index), Path(file_path).name, "--:--", subtitle_state, "Idle"])
+                item.setData(0, Qt.UserRole, file_path)
                 self.playlist.addTopLevelItem(item)
 
             if files:
@@ -338,9 +672,226 @@ class MainWindow(QMainWindow):
                 self.log.append(f"Loaded {len(files)} tracks")
             else:
                 self.player.current_index = -1
-                self.log.append("No audio files found in selected folder")
+                formats = ", ".join(self.config.get("supported_formats", []))
+                self.log.append(f"No audio files found in selected folder. Scanned formats: {formats}")
         finally:
             self._loading_folder = False
+
+    def _identify_and_rename_tracks(self) -> None:
+        if not self.player.playlist:
+            QMessageBox.information(self, "No Tracks", "Load a folder before identifying track sources.")
+            return
+
+        previews: list[RenamePreview] = []
+        total = len(self.player.playlist)
+        self._append_log(f"Looking up track sources online for {total} track(s)...")
+        progress = QProgressDialog("Identifying tracks...", None, 0, total, self)
+        progress.setWindowTitle("Identify & Rename")
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(True)
+        progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+        self.statusBar().showMessage("Identifying track sources...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for index, path in enumerate(self.player.playlist, start=1):
+                file_name = Path(path).name
+                progress.setLabelText(f"Checking {index}/{total}: {file_name}")
+                progress.setValue(index - 1)
+                QApplication.processEvents()
+
+                preview = self.rename_service.build_preview(path)
+                if preview.match is None:
+                    fallback_preview = self._build_subtitle_match_preview(path)
+                    if fallback_preview.match is not None:
+                        preview = fallback_preview
+                previews.append(preview)
+
+                if preview.match is not None:
+                    self._append_log(
+                        f"[Identify {index}/{total}] {file_name} -> {preview.match.suggested_name}"
+                    )
+                else:
+                    detail = preview.error or "No match found"
+                    self._append_log(f"[Identify {index}/{total}] {file_name} -> {detail}")
+        finally:
+            progress.setValue(total)
+            progress.close()
+            QApplication.restoreOverrideCursor()
+            self.statusBar().clearMessage()
+
+        dialog = RenamePreviewDialog(previews, self.rename_service, self)
+        dialog.exec()
+
+        if not dialog.applied_changes:
+            self._append_log("Rename preview closed without changes")
+            return
+
+        rename_map = {old_path: new_path for old_path, new_path in dialog.applied_changes}
+        self.player.playlist = [rename_map.get(path, path) for path in self.player.playlist]
+        if self.player.current_file in rename_map:
+            self.player.current_file = rename_map[self.player.current_file]
+        self._refresh_playlist_names()
+        self._append_log(f"Renamed {len(dialog.applied_changes)} track(s)")
+
+    def _build_subtitle_match_preview(self, path: str) -> RenamePreview:
+        snippets = self._transcribe_subtitle_snippets(path)
+        if not snippets:
+            return RenamePreview(
+                path=path,
+                current_name=Path(path).name,
+                detected_query="",
+                match=None,
+                error="No subtitle snippet available for fallback.",
+            )
+
+        preview = self.rename_service.build_preview_from_lyric_snippets(path, snippets)
+        if preview.match is not None:
+            self._append_log(f"[Subtitle Match] {Path(path).name} -> {preview.match.suggested_name}")
+        return preview
+
+    def _transcribe_subtitle_snippets(self, audio_path: str, seconds: int = 18) -> list[str]:
+        duration = self._get_audio_duration_seconds(audio_path)
+        starts = self._build_sample_offsets(duration, seconds)
+        snippets: list[str] = []
+
+        for start_seconds in starts:
+            snippet = self._transcribe_subtitle_snippet(audio_path, start_seconds=start_seconds, seconds=seconds)
+            if snippet and snippet not in snippets:
+                snippets.append(snippet)
+        return snippets
+
+    def _transcribe_subtitle_snippet(self, audio_path: str, start_seconds: int = 0, seconds: int = 18) -> str:
+        preview_wav = self._make_preview_wav(audio_path, start_seconds=start_seconds, seconds=seconds)
+        if not preview_wav:
+            return ""
+
+        try:
+            kwargs = {
+                "beam_size": self.config.get("whisper_beam_size", 1),
+                "best_of": self.config.get("whisper_best_of", 1),
+            }
+            language = self.config.get("whisper_language", "auto")
+            if language and language != "auto":
+                kwargs["language"] = language
+
+            subtitles = self.transcriber.transcribe_to_subtitles(
+                preview_wav,
+                model_name=self.config.get("whisper_model", "base"),
+                device=self.config.get("device", "auto"),
+                **kwargs,
+            )
+        except Exception:
+            return ""
+        finally:
+            try:
+                Path(preview_wav).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        parts: list[str] = []
+        for subtitle in subtitles:
+            text = subtitle.text.strip()
+            if len(text) < 6:
+                continue
+            parts.append(text)
+            if len(" ".join(parts)) >= 80 or len(parts) >= 3:
+                break
+        return " ".join(parts).strip()
+
+    def _get_audio_duration_seconds(self, audio_path: str) -> float:
+        try:
+            cmd = [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                audio_path,
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+            )
+            if proc.returncode != 0:
+                return 0.0
+            return float(proc.stdout.strip() or 0.0)
+        except Exception:
+            return 0.0
+
+    def _build_sample_offsets(self, duration: float, seconds: int) -> list[int]:
+        if duration <= 0:
+            return [0, 24, 48]
+
+        max_start = max(int(duration) - seconds, 0)
+        candidates = [
+            0,
+            max(int(duration * 0.25) - seconds // 2, 0),
+            max(int(duration * 0.55) - seconds // 2, 0),
+            max(int(duration * 0.8) - seconds // 2, 0),
+        ]
+
+        offsets: list[int] = []
+        for candidate in candidates:
+            clamped = min(max(candidate, 0), max_start)
+            if clamped not in offsets:
+                offsets.append(clamped)
+        return offsets
+
+    def _make_preview_wav(self, audio_path: str, start_seconds: int, seconds: int) -> Optional[str]:
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                str(start_seconds),
+                "-t",
+                str(seconds),
+                "-i",
+                audio_path,
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-f",
+                "wav",
+                tmp_path,
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+            )
+            if proc.returncode != 0:
+                Path(tmp_path).unlink(missing_ok=True)
+                return None
+            return tmp_path
+        except Exception:
+            return None
+
+    def _refresh_playlist_names(self) -> None:
+        for index, path in enumerate(self.player.playlist):
+            row = self.playlist.topLevelItem(index)
+            if row is None:
+                continue
+            row.setText(0, str(index + 1))
+            row.setData(0, Qt.UserRole, path)
+            row.setText(1, Path(path).name)
 
     def _reset_playback_ui(self) -> None:
         self.subtitle_box.clear()
@@ -369,16 +920,16 @@ class MainWindow(QMainWindow):
     def _prev(self) -> None:
         if not self.player.playlist:
             return
-        i = self.player.current_index - 1 if self.player.current_index > 0 else len(self.player.playlist) - 1
-        self._play_index(i)
+        index = self.player.current_index - 1 if self.player.current_index > 0 else len(self.player.playlist) - 1
+        self._play_index(index)
 
     def _next(self) -> None:
         if self._closing_ui or self._loading_folder:
             return
         if not self.player.playlist:
             return
-        i = self.player.current_index + 1 if self.player.current_index < len(self.player.playlist) - 1 else 0
-        self._play_index(i)
+        index = self.player.current_index + 1 if self.player.current_index < len(self.player.playlist) - 1 else 0
+        self._play_index(index)
 
     def _play_index(self, index: int) -> None:
         if self._closing_ui or self._loading_folder:
@@ -386,7 +937,7 @@ class MainWindow(QMainWindow):
         if not (0 <= index < len(self.player.playlist)):
             return
 
-        self._cancel_active_transcription()
+        self.transcription_manager.cancel_active()
 
         self.player.current_index = index
         path = self.player.playlist[index]
@@ -412,67 +963,12 @@ class MainWindow(QMainWindow):
         self.time_label.setText(f"00:00:00 / {format_timestamp(self.player.current_duration)}")
         self._was_playing_track = True
         self._handling_auto_next = False
+        self._refresh_row_state(path, subtitles="Ready" if self.player.current_subtitles else "Missing", task="Idle")
 
-    def _cancel_active_transcription(self) -> None:
-        with self._lock:
-            self._current_generation += 1
-            self._transcribing_paths.clear()
-            self._inflight.clear()
-            self._tiny_next_start.clear()
-            self._base_next_start.clear()
-
-        self._drain_queue(self._urgent_queue)
-        self._drain_queue(self._bg_queue)
-
-    @staticmethod
-    def _drain_queue(q: "queue.Queue[Optional[dict]]") -> None:
-        while True:
-            try:
-                q.get_nowait()
-                q.task_done()
-            except Exception:
-                break
-
-    def _on_subtitle_needed(self, audio_path: str) -> None:
-        if not self.config.get("auto_transcribe_on_play", True):
-            return
-        if self.player.current_file != audio_path:
-            return
-
-        with self._lock:
-            self._transcribing_paths.add(audio_path)
-            if audio_path not in self._tiny_next_start:
-                self._tiny_next_start[audio_path] = 0
-            if audio_path not in self._base_next_start:
-                self._base_next_start[audio_path] = 0
-            generation = self._current_generation
-
-        for i in range(self.playlist.topLevelItemCount()):
-            row = self.playlist.topLevelItem(i)
-            if row and row.data(0, Qt.UserRole) == audio_path:
-                row.setText(4, "Run")
-                break
-
-        self._enqueue_chunk_job(
-            path=audio_path,
-            start_seconds=0,
-            seconds=int(self.config.get("subtitle_preview_seconds", 20)),
-            model="base",
-            generation=generation,
-            urgent=True,
-        )
-
-        status = "Generating subtitles..."
-        if not self._status_active:
-            self._append_subtitle_line(status, self._fmt_status)
-            self._last_status_text = status
-            self._status_active = True
-
-    def _tick_transcription_scheduler(self) -> None:
+    def _tick(self) -> None:
         if self._closing_ui or self._loading_folder:
             return
 
-        # Fallback watchdog: if playback stopped but callback was missed, advance to next track.
         if (
             self._was_playing_track
             and not self.player.is_playing
@@ -484,7 +980,6 @@ class MainWindow(QMainWindow):
             self._handle_playback_end()
             return
 
-        # Secondary watchdog: mixer reports end but internal state did not transition.
         if (
             self._was_playing_track
             and self.player.is_playing
@@ -499,283 +994,41 @@ class MainWindow(QMainWindow):
                 self._handle_playback_end()
                 return
 
-        if not self.player.is_playing or self.player.is_paused:
-            return
+        self.transcription_manager.tick()
 
-        path = self.player.current_file
-        if not path:
-            return
+    def _on_subtitle_needed(self, audio_path: str) -> None:
+        self.transcription_manager.start_for_path(audio_path)
 
-        with self._lock:
-            if path not in self._transcribing_paths:
-                return
-            generation = self._current_generation
-            tiny_next = int(self._tiny_next_start.get(path, 0))
-            base_next = int(self._base_next_start.get(path, 0))
+    def _on_transcription_started(self, path: str) -> None:
+        self._refresh_row_state(path, task="Run")
+        if self.player.current_file == path and not self._status_active:
+            status = "Generating subtitles..."
+            self._append_subtitle_line(status, self._fmt_status)
+            self._last_status_text = status
+            self._status_active = True
 
-        position = self.player.get_position()
-        lead_seconds = int(self.config.get("subtitle_chunk_lead_seconds", 12))
-        tiny_chunk = int(self.config.get("subtitle_preview_seconds", 20))
-        base_chunk = int(self.config.get("base_chunk_seconds", 45))
-        upgrade_start = int(self.config.get("upgrade_start_after_seconds", 60))
+    def _on_transcription_ready(self, path: str, model: str) -> None:
+        task = model.capitalize()
+        self._refresh_row_state(path, subtitles="Ready", task=task)
 
-        if int(position + lead_seconds) >= tiny_next:
-            self._enqueue_chunk_job(
-                path=path,
-                start_seconds=tiny_next,
-                seconds=tiny_chunk,
-                model="base",
-                generation=generation,
-                urgent=True,
-            )
-            with self._lock:
-                self._tiny_next_start[path] = tiny_next + tiny_chunk
+    def _on_transcription_failed(self, path: str, model: str, error: str) -> None:
+        self._refresh_row_state(path, task="Fail")
+        self.log.append(f"[{model}] Transcription failed: {error}")
 
-        if not self.config.get("enable_full_transcription", True):
-            return
-
-        tiny_covered = self._get_cached_coverage(path)
-        if tiny_covered < upgrade_start:
-            return
-
-        if int(position + lead_seconds) >= base_next and (base_next + base_chunk) <= int(tiny_covered + 1):
-            self._enqueue_chunk_job(
-                path=path,
-                start_seconds=base_next,
-                seconds=base_chunk,
-                model="base",
-                generation=generation,
-                urgent=False,
-            )
-            with self._lock:
-                self._base_next_start[path] = base_next + base_chunk
-
-    def _enqueue_chunk_job(
+    def _refresh_row_state(
         self,
         path: str,
-        start_seconds: int,
-        seconds: int,
-        model: str,
-        generation: int,
-        urgent: bool,
+        subtitles: Optional[str] = None,
+        task: Optional[str] = None,
     ) -> None:
-        if seconds <= 0:
-            return
-
-        key = (path, int(start_seconds), model, int(generation))
-        with self._lock:
-            if key in self._inflight:
-                return
-            self._inflight.add(key)
-
-        job = {
-            "path": path,
-            "start": int(start_seconds),
-            "seconds": int(seconds),
-            "model": model,
-            "generation": int(generation),
-        }
-        if urgent:
-            self._urgent_queue.put(job)
-        else:
-            self._bg_queue.put(job)
-
-    def _transcription_worker(self) -> None:
-        while not self._worker_stop.is_set():
-            job = self._dequeue_job()
-            if job is None:
-                continue
-
-            path = str(job.get("path", ""))
-            start_seconds = int(job.get("start", 0))
-            seconds = int(job.get("seconds", 0))
-            model = str(job.get("model", "tiny"))
-            generation = int(job.get("generation", -1))
-
-            if not path or seconds <= 0:
-                self._mark_inflight_done(path, start_seconds, model, generation)
-                continue
-
-            if self._is_stale_job(path, generation):
-                self._mark_inflight_done(path, start_seconds, model, generation)
-                continue
-
-            preview_wav = self._make_preview_wav(path, start_seconds, seconds)
-            if not preview_wav:
-                self._mark_inflight_done(path, start_seconds, model, generation)
-                continue
-
-            try:
-                kwargs = {
-                    "beam_size": self.config.get("whisper_beam_size", 1),
-                    "best_of": self.config.get("whisper_best_of", 1),
-                }
-                language = self.config.get("whisper_language", "auto")
-                if language and language != "auto":
-                    kwargs["language"] = language
-
-                result_subs = self.transcriber.transcribe_to_subtitles(
-                    preview_wav,
-                    model_name="base",
-                    device=self.config.get("device", "auto"),
-                    **kwargs,
-                )
-            except Exception as exc:
-                self.transcribe_done_signal.emit(path, str(exc), model)
-                self._mark_inflight_done(path, start_seconds, model, generation)
-                try:
-                    Path(preview_wav).unlink(missing_ok=True)
-                except Exception:
-                    pass
-                continue
-
-            try:
-                Path(preview_wav).unlink(missing_ok=True)
-            except Exception:
-                pass
-
-            if self._is_stale_job(path, generation):
-                self._mark_inflight_done(path, start_seconds, model, generation)
-                continue
-
-            offset_subs = self._offset_subtitles(result_subs, float(start_seconds))
-            if offset_subs:
-                merged = self._merge_subtitles(path, offset_subs, start_seconds, start_seconds + seconds, model)
-                self.player.set_cached_subtitles(path, merged)
-
-            self.transcribe_done_signal.emit(path, None, model)
-            self._mark_inflight_done(path, start_seconds, model, generation)
-
-    def _dequeue_job(self) -> Optional[dict]:
-        try:
-            return self._urgent_queue.get(timeout=0.2)
-        except queue.Empty:
-            pass
-
-        try:
-            return self._bg_queue.get(timeout=0.2)
-        except queue.Empty:
-            return None
-
-    def _is_stale_job(self, path: str, generation: int) -> bool:
-        with self._lock:
-            if generation != self._current_generation:
-                return True
-        return self.player.current_file != path
-
-    def _mark_inflight_done(self, path: str, start_seconds: int, model: str, generation: int) -> None:
-        with self._lock:
-            self._inflight.discard((path, int(start_seconds), model, int(generation)))
-
-    def _make_preview_wav(self, audio_path: str, start_seconds: int, seconds: int) -> Optional[str]:
-        if seconds <= 0:
-            return None
-
-        try:
-            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            tmp_path = tmp.name
-            tmp.close()
-
-            cmd = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-                str(max(0, int(start_seconds))),
-                "-t",
-                str(seconds),
-                "-i",
-                audio_path,
-                "-vn",
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                "-f",
-                "wav",
-                tmp_path,
-            ]
-            proc = subprocess.run(cmd, capture_output=True, text=True)
-            if proc.returncode != 0:
-                Path(tmp_path).unlink(missing_ok=True)
-                return None
-            return tmp_path
-        except Exception:
-            return None
-
-    @staticmethod
-    def _offset_subtitles(subtitles: list[Subtitle], offset: float) -> list[Subtitle]:
-        out: list[Subtitle] = []
-        for i, s in enumerate(subtitles, start=1):
-            text = s.text.strip()
-            if not text:
-                continue
-            out.append(
-                Subtitle(
-                    index=i,
-                    start_time=s.start_time + offset,
-                    end_time=s.end_time + offset,
-                    text=text,
-                )
-            )
-        return out
-
-    def _merge_subtitles(
-        self,
-        path: str,
-        new_subs: list[Subtitle],
-        start_seconds: int,
-        end_seconds: int,
-        model: str,
-    ) -> list[Subtitle]:
-        current = []
-        cache = getattr(self.player, "_subtitle_cache", {})
-        if path in cache:
-            current = list(cache[path])
-        elif self.player.current_file == path:
-            current = list(self.player.current_subtitles)
-
-        if model == "base":
-            kept = [s for s in current if s.end_time < start_seconds or s.start_time > end_seconds]
-            merged = kept + new_subs
-        else:
-            merged = current + new_subs
-
-        merged.sort(key=lambda s: (s.start_time, s.end_time))
-        dedup: list[Subtitle] = []
-        last_key = None
-        for s in merged:
-            key = (round(s.start_time, 3), round(s.end_time, 3), s.text)
-            if key == last_key:
-                continue
-            dedup.append(s)
-            last_key = key
-        return dedup
-
-    def _get_cached_coverage(self, path: str) -> float:
-        cache = getattr(self.player, "_subtitle_cache", {})
-        subs = list(cache.get(path, []))
-        if not subs and self.player.current_file == path:
-            subs = list(self.player.current_subtitles)
-        if not subs:
-            return 0.0
-        return max(s.end_time for s in subs)
-
-    def _on_transcribe_done(self, path: str, error: Optional[str], model: str) -> None:
-        for i in range(self.playlist.topLevelItemCount()):
-            row = self.playlist.topLevelItem(i)
+        for index in range(self.playlist.topLevelItemCount()):
+            row = self.playlist.topLevelItem(index)
             if row and row.data(0, Qt.UserRole) == path:
-                if error:
-                    row.setText(4, "Fail")
-                else:
-                    row.setText(3, "Ready")
-                    row.setText(4, "Base")
+                if subtitles is not None:
+                    row.setText(3, subtitles)
+                if task is not None:
+                    row.setText(4, task)
                 break
-
-        if error:
-            self.log.append(f"[{model}] Transcription failed: {error}")
 
     def _append_log(self, message: str) -> None:
         self.log.append(message)
@@ -786,7 +1039,8 @@ class MainWindow(QMainWindow):
     def _apply_subtitle(self, subtitle_obj: object) -> None:
         subtitle = subtitle_obj if isinstance(subtitle_obj, Subtitle) else None
         if subtitle is None:
-            if self.player.current_file and self._is_transcribing(self.player.current_file):
+            current_path = self.player.current_file
+            if current_path and self.transcription_manager.is_transcribing(current_path):
                 status = "Generating subtitles..."
                 if not self._status_active:
                     self._append_subtitle_line(status, self._fmt_status)
@@ -876,15 +1130,6 @@ class MainWindow(QMainWindow):
         finally:
             self._handling_auto_next = False
 
-    def _is_transcribing(self, path: str) -> bool:
-        with self._lock:
-            if path not in self._transcribing_paths:
-                return False
-            for inflight_path, _start, _model, _gen in self._inflight:
-                if inflight_path == path:
-                    return True
-            return False
-
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._closing_ui = True
         try:
@@ -897,15 +1142,7 @@ class MainWindow(QMainWindow):
         self.player.on_playback_end = None
         self.player.on_subtitle_needed = None
 
-        self._worker_stop.set()
-        try:
-            self._urgent_queue.put_nowait(None)
-        except Exception:
-            pass
-        try:
-            self._bg_queue.put_nowait(None)
-        except Exception:
-            pass
+        self.transcription_manager.shutdown()
         self.player.cleanup()
         super().closeEvent(event)
 

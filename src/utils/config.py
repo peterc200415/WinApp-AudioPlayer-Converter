@@ -1,103 +1,106 @@
-"""
-配置管理模組
-提供應用程式配置的載入和保存功能
-"""
+"""JSON-backed application configuration."""
+
+from __future__ import annotations
 
 import json
-import os
-from typing import Dict, Any
 from pathlib import Path
+from typing import Any
 
 
 class Config:
-    """配置管理類"""
-    
+    """Simple configuration wrapper with stable defaults."""
+
+    DEFAULT_SUPPORTED_FORMATS = [
+        ".mp3",
+        ".m4a",
+        ".wav",
+        ".wma",
+        ".flac",
+        ".aac",
+        ".ogg",
+        ".opus",
+        ".mp4",
+    ]
+
     DEFAULT_CONFIG = {
         "whisper_model": "base",
-        "device": "auto",  # "auto", "cuda", "cpu"
-        "whisper_language": "auto",  # "auto" or explicit language code, e.g. "zh", "en"
+        "device": "auto",
+        "whisper_language": "auto",
         "whisper_beam_size": 1,
         "whisper_best_of": 1,
         "translation_target": "zh-TW",
         "font_size": 15,
         "subtitle_font_size": 14,
         "theme": "light",
-        "auto_transcribe": False,  # 背景批次轉錄整個播放列表
-        "auto_transcribe_on_play": True,  # 播放時自動轉錄缺失的字幕
+        "auto_transcribe": False,
+        "auto_transcribe_on_play": True,
         "enable_subtitle_preview": True,
         "subtitle_preview_seconds": 20,
-        "subtitle_preview_model": "tiny",
+        "subtitle_preview_model": "base",
         "enable_full_transcription": True,
         "subtitle_chunk_lead_seconds": 12,
         "base_chunk_seconds": 45,
         "upgrade_start_after_seconds": 60,
-        "supported_formats": [".mp3", ".m4a", ".wav", ".wma"]
+        "supported_formats": DEFAULT_SUPPORTED_FORMATS,
     }
-    
+
     def __init__(self, config_path: str = "config/settings.json"):
-        """
-        初始化配置管理
-        
-        Args:
-            config_path: 配置檔案路徑
-        """
-        self.config_path = config_path
+        self.config_path = Path(config_path)
         self._config = self.DEFAULT_CONFIG.copy()
         self.load()
-    
+
     def load(self) -> None:
-        """從檔案載入配置"""
-        config_file = Path(self.config_path)
-        if config_file.exists():
+        """Load config from disk, preserving defaults for missing keys."""
+        if self.config_path.exists():
             try:
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    loaded_config = json.load(f)
+                with self.config_path.open("r", encoding="utf-8") as file:
+                    loaded_config = json.load(file)
+            except (json.JSONDecodeError, OSError) as exc:
+                print(f"Failed to load config: {exc}")
+            else:
+                if isinstance(loaded_config, dict):
                     self._config.update(loaded_config)
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"載入配置檔案失敗: {e}，使用默認配置")
-        else:
-            # 如果配置檔案不存在，創建默認配置檔案
-            self.save()
-    
+                    self._normalize_supported_formats()
+                return
+
+        self.save()
+
     def save(self) -> None:
-        """保存配置到檔案"""
-        config_file = Path(self.config_path)
-        config_file.parent.mkdir(parents=True, exist_ok=True)
-        
+        """Persist config to disk."""
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(self._config, f, indent=4, ensure_ascii=False)
-        except IOError as e:
-            print(f"保存配置檔案失敗: {e}")
-    
+            with self.config_path.open("w", encoding="utf-8") as file:
+                json.dump(self._config, file, indent=4, ensure_ascii=False)
+        except OSError as exc:
+            print(f"Failed to save config: {exc}")
+
     def get(self, key: str, default: Any = None) -> Any:
-        """
-        獲取配置值
-        
-        Args:
-            key: 配置鍵
-            default: 默認值
-        
-        Returns:
-            配置值
-        """
         return self._config.get(key, default)
-    
+
     def set(self, key: str, value: Any) -> None:
-        """
-        設置配置值
-        
-        Args:
-            key: 配置鍵
-            value: 配置值
-        """
         self._config[key] = value
-    
-    def get_all(self) -> Dict[str, Any]:
-        """
-        獲取所有配置
-        
-        Returns:
-            所有配置的字典
-        """
+
+    def get_all(self) -> dict[str, Any]:
         return self._config.copy()
+
+    def _normalize_supported_formats(self) -> None:
+        configured = self._config.get("supported_formats", [])
+        if not isinstance(configured, list):
+            self._config["supported_formats"] = list(self.DEFAULT_SUPPORTED_FORMATS)
+            return
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for ext in configured + self.DEFAULT_SUPPORTED_FORMATS:
+            if not isinstance(ext, str):
+                continue
+            ext_text = ext.strip().lower()
+            if not ext_text:
+                continue
+            if not ext_text.startswith("."):
+                ext_text = f".{ext_text}"
+            if ext_text in seen:
+                continue
+            seen.add(ext_text)
+            normalized.append(ext_text)
+        self._config["supported_formats"] = normalized
