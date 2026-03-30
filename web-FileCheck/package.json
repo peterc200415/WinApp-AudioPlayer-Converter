@@ -1,0 +1,17 @@
+{
+  "name": "web-filecheck",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-format file comparison tool for spreadsheets and documents.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test:smoke": "node scripts/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

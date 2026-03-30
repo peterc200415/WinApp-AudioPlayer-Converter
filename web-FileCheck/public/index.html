@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>web-FileCheck</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="hero">
+        <p class="eyebrow">Rewrite In Progress</p>
+        <h1>web-FileCheck</h1>
+        <p class="hero-copy">
+          A new multi-format comparison tool for spreadsheets and documents, planned for deployment on
+          <strong>10.10.10.30:4000</strong>.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>v1 Scope</h2>
+          <span class="badge">Scaffold</span>
+        </div>
+        <div class="pill-row">
+          <span class="pill">xls</span>
+          <span class="pill">xlsx</span>
+          <span class="pill">txt</span>
+          <span class="pill">md</span>
+          <span class="pill">docx</span>
+          <span class="pill">pdf</span>
+        </div>
+        <p class="panel-copy">
+          The first build separates spreadsheet-style comparisons from document-style comparisons so we can give cleaner
+          results per format family.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Upload Compare</h2>
+          <span class="badge badge--muted">txt / md / xls / xlsx live now</span>
+        </div>
+        <form id="compare-form" class="planner-form">
+          <label>
+            File A
+            <input id="fileA" name="fileA" type="file" accept=".txt,.md,.xls,.xlsx,.pdf,.docx" />
+          </label>
+          <label>
+            File B
+            <input id="fileB" name="fileB" type="file" accept=".txt,.md,.xls,.xlsx,.pdf,.docx" />
+          </label>
+          <button type="submit">Compare Files</button>
+        </form>
+        <p id="status" class="status">Upload two files to compare. `txt`, `md`, `xls`, and `xlsx` are active in this build.</p>
+        <pre id="output" class="output"></pre>
+      </section>
+
+      <section class="panel panel--grid">
+        <article class="info-card">
+          <h3>Spreadsheet Mode</h3>
+          <p>Planned for `xls` and `xlsx`, with row-level and key-based difference summaries.</p>
+        </article>
+        <article class="info-card">
+          <h3>Document Mode</h3>
+          <p>Planned for `txt`, `md`, `docx`, and `pdf`, with section and paragraph-oriented diffs.</p>
+        </article>
+        <article class="info-card">
+          <h3>Storage</h3>
+          <p>Production data will live under `/data/web-FileCheck` instead of inside the app directory.</p>
+        </article>
+      </section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
