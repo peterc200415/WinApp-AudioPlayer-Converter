@@ -46,6 +46,26 @@ class Transcriber:
         self._warned_arch_unsupported: bool = False
         self._initialized = True
 
+    @staticmethod
+    def _classify_cuda_error(exc: Exception) -> Optional[str]:
+        """Return a short reason when a CUDA runtime/driver error should fallback to CPU."""
+        message = str(exc).lower()
+        reason_map = {
+            "no kernel image is available for execution on the device": "GPU architecture is not supported by this PyTorch build",
+            "cudaerrornokernelimagefordevice": "GPU architecture is not supported by this PyTorch build",
+            "cuda driver version is insufficient for cuda runtime version": "CUDA driver is older than the installed PyTorch runtime",
+            "the nvidia driver on your system is too old": "NVIDIA driver is too old for the installed PyTorch runtime",
+            "found no nvidia driver on your system": "NVIDIA driver is not available",
+            "system has unsupported display driver / cuda driver combination": "display driver and CUDA runtime are incompatible",
+            "cuda initialization error": "CUDA initialization failed",
+            "cuda driver initialization failed": "CUDA driver initialization failed",
+            "cuda unknown error": "CUDA initialization failed",
+        }
+        for hint, reason in reason_map.items():
+            if hint in message:
+                return reason
+        return None
+
     def _emit_info(self, message: str) -> None:
         """Emit info message to console and optional UI callback."""
         print(message)
@@ -110,8 +130,8 @@ class Transcriber:
                     major, minor = torch.cuda.get_device_capability(0)
                     arch = f"sm_{major}{minor}"
                     supported_arches = set(torch.cuda.get_arch_list())
-                if supported_arches and arch not in supported_arches:
                     gpu_name = torch.cuda.get_device_name(0)
+                if supported_arches and arch not in supported_arches:
                     if not self._warned_arch_unsupported:
                         self._emit_info(
                             f"[WARN] GPU arch {arch} ({gpu_name}) is not supported by this PyTorch build; falling back to CPU"
@@ -119,11 +139,15 @@ class Transcriber:
                         self._warned_arch_unsupported = True
                     self._disable_cuda = True
                     return "cpu"
-            except Exception:
+            except Exception as exc:
+                reason = self._classify_cuda_error(exc)
+                if reason:
+                    self._emit_info(f"[WARN] CUDA probe failed ({reason}); falling back to CPU")
+                    self._disable_cuda = True
+                    return "cpu"
                 # If any capability query fails, still try CUDA; load_model() has a safe fallback.
-                pass
+                gpu_name = "CUDA GPU"
 
-            gpu_name = torch.cuda.get_device_name(0)
             self._emit_info(f"[OK] Using GPU: {gpu_name}")
             return "cuda"
 
@@ -155,15 +179,13 @@ class Transcriber:
                 self._model_name = model_name
                 return
             except Exception as e:
-                # GPU-first auto mode: if CUDA fails at runtime (unsupported GPU arch / driver), fallback to CPU
-                msg = str(e)
-                cuda_kernel_image_error = (
-                    "no kernel image is available for execution on the device" in msg
-                    or "cudaErrorNoKernelImageForDevice" in msg
-                )
-                if self._device == "cuda" and (device in ("auto", "cuda")) and cuda_kernel_image_error:
-                    self._emit_info("[WARN] CUDA runtime not compatible with this GPU; fallback to CPU")
+                # GPU-first mode: if CUDA fails at runtime (driver/runtime mismatch, unsupported GPU arch),
+                # retry once on CPU so transcription still works.
+                cuda_reason = self._classify_cuda_error(e)
+                if self._device == "cuda" and (device in ("auto", "cuda")) and cuda_reason:
+                    self._emit_info(f"[WARN] CUDA runtime not compatible ({cuda_reason}); falling back to CPU")
                     self._disable_cuda = True
+                    self._model = None
                     try:
                         torch.cuda.empty_cache()
                     except Exception:

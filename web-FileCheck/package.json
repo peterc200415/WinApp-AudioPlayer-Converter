@@ -12,6 +12,13 @@
     "node": ">=18"
   },
   "dependencies": {
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^1.1.1",
+    "pdfreader": "^3.0.8",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "docx": "^9.6.1",
+    "pdf-lib": "^1.17.1"
   }
 }

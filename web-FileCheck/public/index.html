@@ -9,37 +9,17 @@
   <body>
     <main class="page-shell">
       <section class="hero">
-        <p class="eyebrow">Rewrite In Progress</p>
+        <p class="eyebrow">Multi-format Compare</p>
         <h1>web-FileCheck</h1>
         <p class="hero-copy">
-          A new multi-format comparison tool for spreadsheets and documents, planned for deployment on
-          <strong>10.10.10.30:4000</strong>.
-        </p>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>v1 Scope</h2>
-          <span class="badge">Scaffold</span>
-        </div>
-        <div class="pill-row">
-          <span class="pill">xls</span>
-          <span class="pill">xlsx</span>
-          <span class="pill">txt</span>
-          <span class="pill">md</span>
-          <span class="pill">docx</span>
-          <span class="pill">pdf</span>
-        </div>
-        <p class="panel-copy">
-          The first build separates spreadsheet-style comparisons from document-style comparisons so we can give cleaner
-          results per format family.
+          上傳兩個檔案進行比對，支援表格型與文件型格式。結果頁會用可讀的摘要與差異區塊呈現，不再只顯示原始 JSON。
         </p>
       </section>
 
       <section class="panel">
         <div class="panel-head">
           <h2>Upload Compare</h2>
-          <span class="badge badge--muted">txt / md / xls / xlsx live now</span>
+          <span class="badge badge--muted">txt / md / xls / xlsx / docx / pdf live now</span>
         </div>
         <form id="compare-form" class="planner-form">
           <label>
@@ -52,22 +32,35 @@
           </label>
           <button type="submit">Compare Files</button>
         </form>
-        <p id="status" class="status">Upload two files to compare. `txt`, `md`, `xls`, and `xlsx` are active in this build.</p>
-        <pre id="output" class="output"></pre>
+        <p id="status" class="status">Upload two files to compare. `txt`, `md`, `xls`, `xlsx`, `docx`, and text-based `pdf` are active in this build.</p>
+      </section>
+
+      <section id="results-panel" class="panel" hidden>
+        <div class="panel-head">
+          <h2>Comparison Result</h2>
+          <span class="badge">Readable View</span>
+        </div>
+        <p id="results-meta" class="panel-copy"></p>
+        <div id="summary-grid" class="summary-grid"></div>
+        <div id="details" class="details-stack"></div>
+        <details class="raw-panel">
+          <summary>Raw JSON</summary>
+          <pre id="output" class="output"></pre>
+        </details>
       </section>
 
       <section class="panel panel--grid">
         <article class="info-card">
           <h3>Spreadsheet Mode</h3>
-          <p>Planned for `xls` and `xlsx`, with row-level and key-based difference summaries.</p>
+          <p>適用於 `xls` 與 `xlsx`，會整理新增、刪除、修改與重複 key 的資訊。</p>
         </article>
         <article class="info-card">
           <h3>Document Mode</h3>
-          <p>Planned for `txt`, `md`, `docx`, and `pdf`, with section and paragraph-oriented diffs.</p>
+          <p>適用於 `txt`、`md`、`docx`、`pdf`，會整理段落與章節差異。</p>
         </article>
         <article class="info-card">
           <h3>Storage</h3>
-          <p>Production data will live under `/data/web-FileCheck` instead of inside the app directory.</p>
+          <p>正式環境資料保存在 `/data/web-FileCheck`，方便後續備份與維護。</p>
         </article>
       </section>
     </main>

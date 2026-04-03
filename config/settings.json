@@ -1,11 +1,31 @@
 {
     "whisper_model": "base",
     "device": "auto",
+    "whisper_language": "auto",
+    "whisper_beam_size": 1,
+    "whisper_best_of": 1,
     "translation_target": "zh-TW",
     "font_size": 15,
     "subtitle_font_size": 14,
-    "theme": "light",
+    "theme": "dark",
     "auto_transcribe": false,
     "auto_transcribe_on_play": true,
-    "supported_formats": [".mp3", ".m4a", ".wav"]
+    "enable_subtitle_preview": true,
+    "subtitle_preview_seconds": 20,
+    "subtitle_preview_model": "base",
+    "enable_full_transcription": true,
+    "subtitle_chunk_lead_seconds": 12,
+    "base_chunk_seconds": 45,
+    "upgrade_start_after_seconds": 60,
+    "supported_formats": [
+        ".mp3",
+        ".m4a",
+        ".wav",
+        ".wma",
+        ".flac",
+        ".aac",
+        ".ogg",
+        ".opus",
+        ".mp4"
+    ]
 }

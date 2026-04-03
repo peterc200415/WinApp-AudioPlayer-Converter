@@ -59,7 +59,9 @@ async function parseMultipart(req, maxBytes = 25 * 1024 * 1024) {
     throw new Error("MISSING_MULTIPART_BOUNDARY");
   }
 
-  const boundary = Buffer.from(`--${match[1] || match[2]}`);
+  const boundaryValue = match[1] || match[2];
+  const boundary = Buffer.from(`--${boundaryValue}`);
+  const boundaryWithPrefix = Buffer.from(`\r\n--${boundaryValue}`);
   const body = await readRequestBuffer(req, maxBytes);
   const segments = [];
   let cursor = 0;
@@ -77,14 +79,14 @@ async function parseMultipart(req, maxBytes = 25 * 1024 * 1024) {
     }
 
     const partStart = nextStart + 2;
-    const nextBoundaryIndex = body.indexOf(boundary, partStart);
+    const nextBoundaryIndex = body.indexOf(boundaryWithPrefix, partStart);
     if (nextBoundaryIndex === -1) {
       break;
     }
 
-    const partBuffer = body.subarray(partStart, nextBoundaryIndex - 2);
+    const partBuffer = body.subarray(partStart, nextBoundaryIndex);
     segments.push(partBuffer);
-    cursor = nextBoundaryIndex;
+    cursor = nextBoundaryIndex + 2;
   }
 
   const files = {};
@@ -107,12 +109,13 @@ async function parseMultipart(req, maxBytes = 25 * 1024 * 1024) {
     }
 
     if (disposition.filename) {
+      const fileBuffer = Buffer.from(content);
       files[fieldName] = {
         fieldName,
         filename: disposition.filename,
         contentType: headers["content-type"] || "application/octet-stream",
-        buffer: content,
-        size: content.length,
+        buffer: fileBuffer,
+        size: fileBuffer.length,
       };
       continue;
     }

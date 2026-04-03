@@ -65,8 +65,8 @@ function buildCapabilities() {
       results: config.paths.results,
       reports: config.paths.reports,
     },
-    workingToday: ["txt", "md"],
-    plannedNext: ["xls", "xlsx", "docx", "pdf"],
+    workingToday: ["txt", "md", "xls", "xlsx", "docx", "pdf"],
+    plannedNext: [],
   };
 }
 
@@ -136,7 +136,7 @@ async function handleCompare(req, res) {
       return;
     }
 
-    const documentFormats = ["txt", "md"];
+    const documentFormats = ["txt", "md", "docx", "pdf"];
     const spreadsheetFormats = ["xls", "xlsx"];
 
     if (
@@ -200,7 +200,7 @@ async function handleCompare(req, res) {
 
     const comparison = comparisonPlan.mode === "spreadsheet"
       ? compareSpreadsheets(parseSpreadsheetFile(enrichedFileA), parseSpreadsheetFile(enrichedFileB))
-      : compareDocuments(parseDocumentFile(enrichedFileA), parseDocumentFile(enrichedFileB));
+      : compareDocuments(await parseDocumentFile(enrichedFileA), await parseDocumentFile(enrichedFileB));
 
     const resultRecord = {
       id: createId(),
@@ -232,6 +232,7 @@ async function handleCompare(req, res) {
       comparison,
     });
   } catch (error) {
+    console.error("Compare failed", error);
     sendJson(res, error.message === "PAYLOAD_TOO_LARGE" ? 413 : 400, {
       ok: false,
       error: error.message === "PAYLOAD_TOO_LARGE" ? "Upload is too large." : "Failed to process upload.",
